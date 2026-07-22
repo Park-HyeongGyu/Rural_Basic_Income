@@ -4,10 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Rural Basic Income</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}?v={{ static_versions['styles.css'] }}">
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
-    <script src="{{ url_for('static', path='line_graph.js') }}" defer></script>
-    <script src="{{ url_for('static', path='app.js') }}" defer></script>
+    <script src="{{ url_for('static', path='line_graph.js') }}?v={{ static_versions['line_graph.js'] }}" defer></script>
+    <script src="{{ url_for('static', path='app.js') }}?v={{ static_versions['app.js'] }}" defer></script>
   </head>
   <body>
     <header class="topbar">

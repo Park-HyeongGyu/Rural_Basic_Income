@@ -25,6 +25,9 @@ htmlcov
 build
 dist
 *.egg-info
+*.tar
+*.tar.gz
+*.tgz
 
 data
 exports

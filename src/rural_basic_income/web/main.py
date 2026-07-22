@@ -1,4 +1,6 @@
 from pathlib import Path
+from functools import lru_cache
+from hashlib import sha256
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
@@ -16,6 +18,19 @@ WEB_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEB_DIR / "static"
 TEMPLATES_DIR = WEB_DIR / "templates"
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+STATIC_ASSETS = ("styles.css", "line_graph.js", "app.js")
+
+
+@lru_cache
+def static_asset_versions() -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for asset_name in STATIC_ASSETS:
+        asset_path = STATIC_DIR / asset_name
+        try:
+            versions[asset_name] = sha256(asset_path.read_bytes()).hexdigest()[:12]
+        except FileNotFoundError:
+            versions[asset_name] = __version__
+    return versions
 
 
 def live_health() -> dict[str, str]:
@@ -40,6 +55,7 @@ def index(request: Request) -> HTMLResponse:
         "index.html",
         {
             "app_version": __version__,
+            "static_versions": static_asset_versions(),
         },
     )
 
