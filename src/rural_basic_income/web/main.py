@@ -5,6 +5,7 @@ from rural_basic_income.db.connection import (
     DatabaseUnavailable,
     assert_database_ready,
 )
+from rural_basic_income.web.api.data import router as data_router
 
 
 def live_health() -> dict[str, str]:
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
         methods=["GET"],
         tags=["health"],
     )
+    app.include_router(data_router)
 
     return app
 
