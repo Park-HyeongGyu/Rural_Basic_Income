@@ -39,6 +39,7 @@ logs/
 
 # Local reference archives
 docs/old_codes/
+docs/AI/
 
 # PostgreSQL and container local state
 pgdata/
