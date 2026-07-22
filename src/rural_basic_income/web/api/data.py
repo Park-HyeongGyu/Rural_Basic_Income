@@ -35,16 +35,16 @@ NUMERIC_DATA_TYPES = {
     "smallint",
 }
 VARIABLE_LABELS = {
-    "household": "Households",
-    "population": "Population",
-    "inflow": "Migration inflow",
-    "outflow": "Migration outflow",
-    "net_migration": "Net migration",
-    "within_sigungu_migration": "Within-sigungu migration",
-    "intra_sido_inflow": "Intra-sido inflow",
-    "intra_sido_outflow": "Intra-sido outflow",
-    "inter_sido_inflow": "Inter-sido inflow",
-    "inter_sido_outflow": "Inter-sido outflow",
+    "household": "세대수",
+    "population": "인구",
+    "inflow": "전입",
+    "outflow": "전출",
+    "net_migration": "순이동",
+    "within_sigungu_migration": "시군구내 이동",
+    "intra_sido_inflow": "시도내 시군구간 전입",
+    "intra_sido_outflow": "시도내 시군구간 전출",
+    "inter_sido_inflow": "시도간 전입",
+    "inter_sido_outflow": "시도간 전출",
 }
 
 router = APIRouter(prefix="/api", tags=["data"])
