@@ -1,0 +1,23 @@
+[Unit]
+Description=Rural Basic Income PostgreSQL database
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=rbi-postgres
+Image=docker.io/library/postgres:16
+EnvironmentFile=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/.env
+PublishPort=127.0.0.1:5432:5432
+Volume=rbi-postgres-data:/var/lib/postgresql/data
+HealthCmd=pg_isready -U rbi -d rural_basic_income
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=always
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target
+

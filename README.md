@@ -74,8 +74,42 @@ Check the live health endpoint:
 curl http://127.0.0.1:8000/health/live
 ```
 
+When PostgreSQL is running, check the readiness endpoint:
+
+```bash
+curl http://127.0.0.1:8000/health/ready
+```
+
 Run tests:
 
 ```bash
 .venv/bin/python -m pytest
+```
+
+## Local PostgreSQL
+
+The local database settings are:
+
+```text
+POSTGRES_USER=rbi
+POSTGRES_PASSWORD=passrbi
+POSTGRES_DB=rural_basic_income
+```
+
+The actual `.env` file is ignored by Git. Use `.env.example` as the shared template.
+
+The development Quadlet file is at `deploy/quadlet/rbi-postgres.container`. It uses the named volume `rbi-postgres-data` for PostgreSQL data:
+
+```ini
+Volume=rbi-postgres-data:/var/lib/postgresql/data
+```
+
+To install and start the PostgreSQL user service manually:
+
+```bash
+mkdir -p ~/.config/containers/systemd
+cp deploy/quadlet/rbi-postgres.container ~/.config/containers/systemd/
+systemctl --user daemon-reload
+systemctl --user start rbi-postgres.service
+systemctl --user status rbi-postgres.service
 ```
