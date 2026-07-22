@@ -113,3 +113,31 @@ systemctl --user daemon-reload
 systemctl --user start rbi-postgres.service
 systemctl --user status rbi-postgres.service
 ```
+
+## KOSIS API
+
+Put the KOSIS OpenAPI key in the ignored local `.env` file:
+
+```env
+KOSIS_API_KEY=your-api-key
+```
+
+The KOSIS parameter API smoke test is skipped by default. To run it against the live API, provide the target table parameters and opt in explicitly:
+
+```bash
+RUN_KOSIS_API_SMOKE_TEST=1 \
+KOSIS_SMOKE_ORG_ID=101 \
+KOSIS_SMOKE_TBL_ID=your_table_id \
+KOSIS_SMOKE_ITM_ID=your_item_id \
+KOSIS_SMOKE_OBJ_L1=your_classification_code \
+KOSIS_SMOKE_PRD_SE=M \
+.venv/bin/python -m pytest tests/test_kosis_live.py
+```
+
+To download and import the 2026-01 KOSIS raw test tables into PostgreSQL, opt in explicitly:
+
+```bash
+RUN_KOSIS_RAW_IMPORT_TEST=1 .venv/bin/python -m pytest tests/test_kosis_raw_import_live.py
+```
+
+This creates `raw_json.kosis_payloads`, `raw.household`, `raw.population`, `raw.mover`, and `metadata.download_status`, then exports them to `data/temp/`.
