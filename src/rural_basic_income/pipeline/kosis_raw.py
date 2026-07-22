@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import json
+import time
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -10,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from rural_basic_income.db.connection import get_engine
 from rural_basic_income.pipeline.kosis import fetch_statistics_parameter_data
@@ -52,6 +54,8 @@ MOVER_SPEC = KosisRawSpec(
 )
 
 KOSIS_RAW_SPECS = (HOUSEHOLD_SPEC, POPULATION_SPEC, MOVER_SPEC)
+DEFAULT_START_PERIOD = "202510"
+DEFAULT_END_PERIOD = "202603"
 
 
 def quote_identifier(identifier: str) -> str:
@@ -77,6 +81,41 @@ def dedupe_preserve_order(values: Iterable[str]) -> list[str]:
         seen.add(value)
         deduped.append(value)
     return deduped
+
+
+def validate_period(period: str) -> str:
+    if len(period) != 6 or not period.isdigit():
+        raise ValueError(f"period must be YYYYMM: {period}")
+
+    month = int(period[4:6])
+    if month < 1 or month > 12:
+        raise ValueError(f"period month must be 01-12: {period}")
+
+    return period
+
+
+def iter_month_periods(start_period: str, end_period: str) -> list[str]:
+    start = validate_period(start_period)
+    end = validate_period(end_period)
+    start_year = int(start[:4])
+    start_month = int(start[4:6])
+    end_year = int(end[:4])
+    end_month = int(end[4:6])
+
+    if (start_year, start_month) > (end_year, end_month):
+        raise ValueError("start_period must be before or equal to end_period")
+
+    periods = []
+    year = start_year
+    month = start_month
+    while (year, month) <= (end_year, end_month):
+        periods.append(f"{year:04d}{month:02d}")
+        month += 1
+        if month == 13:
+            year += 1
+            month = 1
+
+    return periods
 
 
 def get_dimension_specs(rows: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, str]]:
@@ -164,12 +203,25 @@ def fetch_kosis_raw_payloads(
     *,
     population_chunk_size: int = 100,
     mover_chunk_size: int = 70,
+    request_sleep_seconds: float = 1,
+    timeout: float = 30,
+    max_retries: int = 5,
 ) -> dict[str, list[tuple[dict[str, str], list[dict[str, Any]]]]]:
+    def fetch_rows(params: dict[str, str]) -> list[dict[str, Any]]:
+        rows = fetch_statistics_parameter_data(
+            params,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        if request_sleep_seconds > 0:
+            time.sleep(request_sleep_seconds)
+        return rows
+
     household_params = {
         **base_params(HOUSEHOLD_SPEC, period),
         "objL1": "ALL",
     }
-    household_rows = fetch_statistics_parameter_data(household_params)
+    household_rows = fetch_rows(household_params)
     region_codes = dedupe_preserve_order(
         str(row["C1"])
         for row in household_rows
@@ -189,7 +241,7 @@ def fetch_kosis_raw_payloads(
             "objL2": "ALL",
         }
         payloads[POPULATION_SPEC.source_name].append(
-            (params, fetch_statistics_parameter_data(params))
+            (params, fetch_rows(params))
         )
 
     for chunk in make_chunks(region_codes, mover_chunk_size):
@@ -200,7 +252,7 @@ def fetch_kosis_raw_payloads(
             "objL3": "ALL",
         }
         payloads[MOVER_SPEC.source_name].append(
-            (params, fetch_statistics_parameter_data(params))
+            (params, fetch_rows(params))
         )
 
     return payloads
@@ -244,6 +296,41 @@ def create_tracking_tables(engine: Engine) -> None:
             connection.execute(text(statement))
 
 
+def table_exists(connection: Connection, schema_name: str, table_name: str) -> bool:
+    exists = connection.execute(
+        text(
+            """
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = :schema_name
+              AND table_name = :table_name
+            """
+        ),
+        {"schema_name": schema_name, "table_name": table_name},
+    ).scalar_one_or_none()
+    return exists is not None
+
+
+def get_table_columns_for_connection(
+    connection: Connection,
+    schema_name: str,
+    table_name: str,
+) -> list[str]:
+    result = connection.execute(
+        text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = :schema_name
+              AND table_name = :table_name
+            ORDER BY ordinal_position
+            """
+        ),
+        {"schema_name": schema_name, "table_name": table_name},
+    )
+    return [row[0] for row in result]
+
+
 def reset_period(engine: Engine, period: str) -> None:
     source_names = [spec.source_name for spec in KOSIS_RAW_SPECS]
     with engine.begin() as connection:
@@ -268,9 +355,44 @@ def reset_period(engine: Engine, period: str) -> None:
             {"period": period, "source_names": source_names},
         )
         for spec in KOSIS_RAW_SPECS:
+            if not table_exists(connection, "raw", spec.raw_table):
+                continue
+            columns = get_table_columns_for_connection(connection, "raw", spec.raw_table)
+            if "시점" not in columns:
+                continue
             connection.execute(
-                text(f"DROP TABLE IF EXISTS raw.{quote_identifier(spec.raw_table)}")
+                text(
+                    f"""
+                    DELETE FROM raw.{quote_identifier(spec.raw_table)}
+                    WHERE {quote_identifier("시점")} = :period
+                    """
+                ),
+                {"period": period},
             )
+
+
+def get_successful_period_row_counts(engine: Engine, period: str) -> dict[str, int]:
+    with engine.begin() as connection:
+        result = connection.execute(
+            text(
+                """
+                SELECT source_name, row_count
+                FROM metadata.download_status
+                WHERE period = :period
+                  AND status = :status
+                """
+            ),
+            {"period": period, "status": DOWNLOAD_STATUS_OK},
+        )
+        return {
+            row.source_name: int(row.row_count or 0)
+            for row in result
+        }
+
+
+def period_is_complete(engine: Engine, period: str) -> bool:
+    row_counts = get_successful_period_row_counts(engine, period)
+    return all(spec.source_name in row_counts for spec in KOSIS_RAW_SPECS)
 
 
 def insert_payload_chunks(
@@ -325,7 +447,7 @@ def insert_payload_chunks(
         )
 
 
-def create_raw_table(
+def ensure_raw_table(
     engine: Engine,
     table_name: str,
     columns: Sequence[str],
@@ -336,11 +458,26 @@ def create_raw_table(
         column_definitions.append(f"{quote_identifier(column)} {column_type}")
 
     ddl = (
-        f"CREATE TABLE raw.{quote_identifier(table_name)} "
+        f"CREATE TABLE IF NOT EXISTS raw.{quote_identifier(table_name)} "
         f"({', '.join(column_definitions)})"
     )
     with engine.begin() as connection:
         connection.execute(text(ddl))
+        existing_columns = set(
+            get_table_columns_for_connection(connection, "raw", table_name)
+        )
+        for column in columns:
+            if column in existing_columns:
+                continue
+            column_type = "timestamptz" if column == "downloaded_at" else "text"
+            connection.execute(
+                text(
+                    f"""
+                    ALTER TABLE raw.{quote_identifier(table_name)}
+                    ADD COLUMN {quote_identifier(column)} {column_type}
+                    """
+                )
+            )
 
 
 def insert_raw_rows(
@@ -433,12 +570,40 @@ def load_raw_tables(
     period: str = "202601",
     *,
     engine: Engine | None = None,
+    force: bool = False,
+    request_sleep_seconds: float = 1,
+    timeout: float = 30,
+    max_retries: int = 5,
 ) -> dict[str, int]:
+    validate_period(period)
     db_engine = engine or get_engine()
     create_tracking_tables(db_engine)
+
+    if not force and period_is_complete(db_engine, period):
+        return get_successful_period_row_counts(db_engine, period)
+
     reset_period(db_engine, period)
 
-    payloads = fetch_kosis_raw_payloads(period)
+    try:
+        payloads = fetch_kosis_raw_payloads(
+            period,
+            request_sleep_seconds=request_sleep_seconds,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+    except Exception as exc:
+        error_message = str(exc)[:1000]
+        for spec in KOSIS_RAW_SPECS:
+            update_download_status(
+                db_engine,
+                spec,
+                period,
+                status=DOWNLOAD_STATUS_PROBLEM,
+                row_count=None,
+                error_message=error_message,
+            )
+        raise
+
     row_counts: dict[str, int] = {}
 
     for spec in KOSIS_RAW_SPECS:
@@ -451,7 +616,7 @@ def load_raw_tables(
         columns, raw_rows = kosis_rows_to_raw_rows(long_rows)
 
         insert_payload_chunks(db_engine, spec, period, chunks)
-        create_raw_table(db_engine, spec.raw_table, columns)
+        ensure_raw_table(db_engine, spec.raw_table, columns)
         insert_raw_rows(db_engine, spec.raw_table, columns, raw_rows)
         update_download_status(
             db_engine,
@@ -465,21 +630,48 @@ def load_raw_tables(
     return row_counts
 
 
+def load_raw_tables_for_periods(
+    start_period: str = DEFAULT_START_PERIOD,
+    end_period: str = DEFAULT_END_PERIOD,
+    *,
+    engine: Engine | None = None,
+    force: bool = False,
+    continue_on_error: bool = False,
+    request_sleep_seconds: float = 1,
+    timeout: float = 30,
+    max_retries: int = 5,
+    progress: bool = False,
+) -> dict[str, dict[str, int] | dict[str, str]]:
+    db_engine = engine or get_engine()
+    results: dict[str, dict[str, int] | dict[str, str]] = {}
+
+    for period in iter_month_periods(start_period, end_period):
+        try:
+            if progress:
+                print(f"start: {period}", flush=True)
+            results[period] = load_raw_tables(
+                period,
+                engine=db_engine,
+                force=force,
+                request_sleep_seconds=request_sleep_seconds,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+            if progress:
+                print(f"done: {period}: {results[period]}", flush=True)
+        except Exception as exc:
+            results[period] = {"error": str(exc)}
+            if progress:
+                print(f"failed: {period}: {exc}", flush=True)
+            if not continue_on_error:
+                raise
+
+    return results
+
+
 def get_table_columns(engine: Engine, schema_name: str, table_name: str) -> list[str]:
     with engine.begin() as connection:
-        result = connection.execute(
-            text(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_schema = :schema_name
-                  AND table_name = :table_name
-                ORDER BY ordinal_position
-                """
-            ),
-            {"schema_name": schema_name, "table_name": table_name},
-        )
-        return [row[0] for row in result]
+        return get_table_columns_for_connection(connection, schema_name, table_name)
 
 
 def export_table_to_csv(
@@ -532,3 +724,60 @@ def export_raw_test_tables(
         exported_paths.append(output_path)
 
     return exported_paths
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Download KOSIS population raw tables into PostgreSQL.",
+    )
+    parser.add_argument(
+        "--period",
+        help="Single YYYYMM period to download. Overrides --start-period and --end-period.",
+    )
+    parser.add_argument("--start-period", default=DEFAULT_START_PERIOD)
+    parser.add_argument("--end-period", default=DEFAULT_END_PERIOD)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--continue-on-error", action="store_true")
+    parser.add_argument("--request-sleep-seconds", type=float, default=1)
+    parser.add_argument("--timeout", type=float, default=30)
+    parser.add_argument("--max-retries", type=int, default=5)
+    parser.add_argument("--export", action="store_true")
+    parser.add_argument("--export-dir", type=Path, default=Path("data/temp"))
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    if args.period:
+        results: dict[str, dict[str, int] | dict[str, str]] = {
+            args.period: load_raw_tables(
+                args.period,
+                force=args.force,
+                request_sleep_seconds=args.request_sleep_seconds,
+                timeout=args.timeout,
+                max_retries=args.max_retries,
+            )
+        }
+    else:
+        results = load_raw_tables_for_periods(
+            args.start_period,
+            args.end_period,
+            force=args.force,
+            continue_on_error=args.continue_on_error,
+            request_sleep_seconds=args.request_sleep_seconds,
+            timeout=args.timeout,
+            max_retries=args.max_retries,
+            progress=True,
+        )
+
+    for period, row_counts in results.items():
+        print(f"{period}: {row_counts}")
+
+    if args.export:
+        paths = export_raw_test_tables(args.export_dir)
+        for path in paths:
+            print(f"exported: {path}")
+
+
+if __name__ == "__main__":
+    main()
