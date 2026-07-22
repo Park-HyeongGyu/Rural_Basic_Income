@@ -34,6 +34,9 @@ logs/
 *.sqlite
 *.sqlite3
 
+# Local reference archives
+docs/old_codes/
+
 # PostgreSQL and container local state
 pgdata/
 postgres-data/
@@ -53,4 +56,3 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
-

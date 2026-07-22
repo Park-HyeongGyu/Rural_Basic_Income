@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     postgres_host: str = "127.0.0.1"
     postgres_port: int = 5432
     database_url: str | None = None
+    kosis_api_key: str | None = None
 
     @property
     def sqlalchemy_database_url(self) -> str:
@@ -36,4 +37,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
