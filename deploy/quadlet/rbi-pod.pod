@@ -1,0 +1,12 @@
+[Unit]
+Description=Rural Basic Income pod
+Wants=network-online.target
+After=network-online.target
+
+[Pod]
+PodName=rbi-pod
+PublishPort=127.0.0.1:8000:8000
+PublishPort=127.0.0.1:5432:5432
+
+[Install]
+WantedBy=default.target
