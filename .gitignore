@@ -25,6 +25,9 @@ env/
 build/
 dist/
 *.egg-info/
+*.tar
+*.tar.gz
+*.tgz
 
 # Project runtime outputs
 data/
