@@ -53,3 +53,29 @@ v0.1.0에서 제외하는 기능:
 
 구체적인 DB schema, 인구 CSV 열 이름, 행정구역 코드 체계는 실제 샘플 데이터를 확인한 뒤 정합니다.
 
+## Local Development
+
+Install the project with development dependencies:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+```
+
+Run the web server:
+
+```bash
+.venv/bin/uvicorn rural_basic_income.web.main:app --reload
+```
+
+Check the live health endpoint:
+
+```bash
+curl http://127.0.0.1:8000/health/live
+```
+
+Run tests:
+
+```bash
+.venv/bin/python -m pytest
+```
