@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rural Basic Income</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}?v={{ static_versions['styles.css'] }}">
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+    <script src="{{ url_for('static', path='line_graph.js') }}?v={{ static_versions['line_graph.js'] }}" defer></script>
+    <script src="{{ url_for('static', path='app.js') }}?v={{ static_versions['app.js'] }}" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Rural Basic Income</p>
+        <h1>지역 인구 시계열</h1>
+      </div>
+      <div class="version">v{{ app_version }}</div>
+    </header>
+
+    <main class="layout">
+      <section class="controls" aria-label="조회 조건">
+        <div class="control-grid">
+          <label class="field">
+            <span>시도</span>
+            <select id="sido-select"></select>
+          </label>
+          <label class="field">
+            <span>시군구</span>
+            <select id="sigungu-select"></select>
+          </label>
+          <label class="field">
+            <span>테이블</span>
+            <select id="table-select"></select>
+          </label>
+          <label class="field filter-field is-hidden" id="sex-field">
+            <span>성별</span>
+            <select id="sex-select">
+              <option value="all">전체</option>
+              <option value="male">남자</option>
+              <option value="female">여자</option>
+            </select>
+          </label>
+          <label class="field filter-field is-hidden" id="age-field">
+            <span>연령</span>
+            <select id="age-select"></select>
+          </label>
+        </div>
+
+        <div class="variable-panel">
+          <div class="panel-heading">
+            <span>변수</span>
+            <button class="text-button" id="select-all-variables" type="button">전체</button>
+          </div>
+          <div class="variable-list" id="variable-list"></div>
+        </div>
+      </section>
+
+      <section class="chart-surface" aria-label="시계열 그래프">
+        <div class="chart-header">
+          <div>
+            <p class="chart-kicker" id="chart-kicker">clean.clean_population</p>
+            <h2 id="chart-title">인구</h2>
+          </div>
+          <button id="refresh-button" type="button">조회</button>
+        </div>
+        <div class="status-line" id="status-line">불러오는 중</div>
+        <div class="chart-box">
+          <div id="line-chart"></div>
+        </div>
+      </section>
+
+      <section class="data-status" aria-label="데이터 상태">
+        <div class="section-heading">
+          <h2>데이터 상태</h2>
+          <span id="table-count"></span>
+        </div>
+        <div class="status-table-wrap">
+          <table class="status-table">
+            <thead>
+              <tr>
+                <th>테이블</th>
+                <th>기간</th>
+                <th>행</th>
+                <th>변수</th>
+              </tr>
+            </thead>
+            <tbody id="data-status-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

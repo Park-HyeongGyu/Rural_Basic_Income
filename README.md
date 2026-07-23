@@ -33,6 +33,7 @@ v0.1.0에서 제외하는 기능:
 - 관리자 페이지
 - 로그인
 - React 또는 Vue 기반 SPA
+- nginx 예시 설정
 
 자세한 인수인계 내용은 [docs/HANDOFF_v0.1.0.md](docs/HANDOFF_v0.1.0.md)를 확인합니다.
 
@@ -51,5 +52,130 @@ v0.1.0에서 제외하는 기능:
 └── deploy/
 ```
 
-구체적인 DB schema, 인구 CSV 열 이름, 행정구역 코드 체계는 실제 샘플 데이터를 확인한 뒤 정합니다.
+## Local Development
 
+Install the project with development dependencies:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+```
+
+Run the web server:
+
+```bash
+.venv/bin/uvicorn rural_basic_income.web.main:app --reload
+```
+
+Check the live health endpoint:
+
+```bash
+curl http://127.0.0.1:8000/health/live
+```
+
+When PostgreSQL is running, check the readiness endpoint:
+
+```bash
+curl http://127.0.0.1:8000/health/ready
+```
+
+## Local PostgreSQL
+
+The local database settings are:
+
+```text
+POSTGRES_USER=rbi
+POSTGRES_PASSWORD=passrbi
+POSTGRES_DB=rural_basic_income
+```
+
+The actual `.env` file is ignored by Git. Use `.env.example` as the shared template.
+
+The development Quadlet files are in `deploy/quadlet/`. PostgreSQL uses the named volume `rbi-postgres-data` for database files:
+
+```ini
+Volume=rbi-postgres-data:/var/lib/postgresql/data
+```
+
+To install and start the PostgreSQL user service manually without the web container:
+
+```bash
+mkdir -p ~/.config/containers/systemd
+cp deploy/quadlet/rbi-pod.pod deploy/quadlet/rbi-postgres.container ~/.config/containers/systemd/
+systemctl --user daemon-reload
+systemctl --user start rbi-pod.service
+systemctl --user start rbi-postgres.service
+systemctl --user status rbi-postgres.service
+```
+
+## KOSIS API
+
+Put the KOSIS OpenAPI key in the ignored local `.env` file:
+
+```env
+KOSIS_API_KEY=your-api-key
+```
+
+To download and import KOSIS raw tables into PostgreSQL:
+
+```bash
+.venv/bin/python -m rural_basic_income.pipeline.kosis_raw \
+  --start-period 202510 \
+  --end-period 202603 \
+  --request-sleep-seconds 1 \
+  --timeout 30 \
+  --max-retries 5 \
+  --export
+```
+
+This creates or appends `raw_json.kosis_payloads`, `raw.household`, `raw.population`, `raw.mover`, and `metadata.download_status`, then exports CSV snapshots to `data/temp/` when `--export` is set.
+
+Run the clean SQL pipeline after raw data is ready:
+
+```bash
+.venv/bin/python -m rural_basic_income.pipeline.run_clean_sql
+```
+
+## Container Image
+
+Build the v0.1.0 web image locally:
+
+```bash
+podman build -t localhost/rural-basic-income:0.1.0 -f Containerfile .
+```
+
+Move the image to another machine with a tar archive:
+
+```bash
+podman save localhost/rural-basic-income:0.1.0 -o rural-basic-income-0.1.0.tar
+rsync -av rural-basic-income-0.1.0.tar user@server:/tmp/
+ssh user@server 'podman load -i /tmp/rural-basic-income-0.1.0.tar'
+```
+
+Or stream it over SSH without leaving a tar file locally:
+
+```bash
+podman save localhost/rural-basic-income:0.1.0 | ssh user@server 'podman load'
+```
+
+## Quadlet Deployment
+
+The v0.1.0 deployment assumes the PostgreSQL volume already exists on the server and contains the imported raw and clean tables. Install the pod, database, and web Quadlet files:
+
+```bash
+mkdir -p ~/.config/containers/systemd
+cp deploy/quadlet/rbi-pod.pod deploy/quadlet/rbi-postgres.container deploy/quadlet/rbi-web.container ~/.config/containers/systemd/
+systemctl --user daemon-reload
+systemctl --user start rbi-pod.service
+systemctl --user start rbi-postgres.service
+systemctl --user start rbi-web.service
+```
+
+`rbi-pod.pod` publishes the web service on `127.0.0.1:8000` and PostgreSQL on `127.0.0.1:5432`. The web and database containers share the pod network namespace, so the existing local `127.0.0.1` database settings work inside the deployment pod.
+
+Check the running web service:
+
+```bash
+curl http://127.0.0.1:8000/health/live
+curl http://127.0.0.1:8000/health/ready
+```

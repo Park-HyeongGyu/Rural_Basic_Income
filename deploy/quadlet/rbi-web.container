@@ -1,0 +1,25 @@
+[Unit]
+Description=Rural Basic Income web application
+Wants=network-online.target
+After=network-online.target
+Requires=rbi-postgres.service
+After=rbi-postgres.service
+
+[Container]
+ContainerName=rbi-web
+Image=localhost/rural-basic-income:0.1.0
+# Port publishing lives in rbi-pod.pod because pod members share one network namespace.
+Pod=rbi-pod.pod
+EnvironmentFile=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/.env
+Environment=APP_ENV=production
+HealthCmd=python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=5).read()"
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=always
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

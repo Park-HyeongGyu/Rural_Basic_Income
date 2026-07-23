@@ -25,6 +25,9 @@ env/
 build/
 dist/
 *.egg-info/
+*.tar
+*.tar.gz
+*.tgz
 
 # Project runtime outputs
 data/
@@ -33,6 +36,10 @@ logs/
 *.log
 *.sqlite
 *.sqlite3
+
+# Local reference archives
+docs/old_codes/
+docs/AI/
 
 # PostgreSQL and container local state
 pgdata/
@@ -53,4 +60,3 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
-
