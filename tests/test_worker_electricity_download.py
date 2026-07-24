@@ -51,6 +51,50 @@ def test_fetch_kepco_documents_accepts_404_with_usable_data(monkeypatch) -> None
     assert documents[1]["data"][0]["metro"] == "강원특별자치도"
 
 
+def test_fetch_kepco_documents_retries_empty_401(monkeypatch) -> None:
+    calls = 0
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self):
+            return '{"data":[{"year":"2026","month":"08","metro":"전체"}]}'.encode()
+
+    def fake_urlopen(request, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise HTTPError(
+                url=request.full_url,
+                code=401,
+                msg="Unauthorized",
+                hdrs={},
+                fp=BytesIO(b"{}"),
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr(electricity, "urlopen", fake_urlopen)
+    monkeypatch.setattr(electricity.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(electricity.random, "uniform", lambda start, end: 0)
+    monkeypatch.setattr(
+        electricity,
+        "build_kepco_url",
+        lambda base_url, params: "https://example.test/kepco",
+    )
+
+    documents = electricity.fetch_kepco_documents(
+        electricity.POWER_USAGE_CONTRACT_TYPE_URL,
+        {"year": "2026", "month": "08"},
+    )
+
+    assert calls == 2
+    assert documents[0]["data"][0]["month"] == "08"
+
+
 def test_download_electricity_returns_source_period_download(
     monkeypatch,
 ) -> None:

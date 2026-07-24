@@ -27,7 +27,7 @@ POWER_USAGE_CONTRACT_TYPE_URL = (
     "https://bigdata.kepco.co.kr/openapi/v1/powerUsage/contractType.do"
 )
 COMMON_CODE_URL = "https://bigdata.kepco.co.kr/openapi/v1/commonCode.do"
-RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+RETRYABLE_HTTP_STATUS_CODES = {401, 408, 409, 425, 429, 500, 502, 503, 504}
 RETRYABLE_MESSAGE_MARKERS = (
     "too many",
     "rate limit",
