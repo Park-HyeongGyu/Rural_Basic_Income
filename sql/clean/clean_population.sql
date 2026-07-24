@@ -8,8 +8,7 @@ CREATE TABLE IF NOT EXISTS clean.clean_population_sex_age (
     region_sigungu text NOT NULL,
     sex text NOT NULL,
     age text NOT NULL,
-    population bigint NOT NULL,
-    is_gun smallint NOT NULL CHECK (is_gun IN (0, 1))
+    population bigint NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS clean_population_sex_age_key
@@ -20,8 +19,7 @@ CREATE TABLE IF NOT EXISTS clean.clean_population_age (
     region_sido text NOT NULL,
     region_sigungu text NOT NULL,
     age text NOT NULL,
-    population bigint NOT NULL,
-    is_gun smallint NOT NULL CHECK (is_gun IN (0, 1))
+    population bigint NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS clean_population_age_key
@@ -32,8 +30,7 @@ CREATE TABLE IF NOT EXISTS clean.clean_population_sex (
     region_sido text NOT NULL,
     region_sigungu text NOT NULL,
     sex text NOT NULL,
-    population bigint NOT NULL,
-    is_gun smallint NOT NULL CHECK (is_gun IN (0, 1))
+    population bigint NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS clean_population_sex_key
@@ -43,8 +40,7 @@ CREATE TABLE IF NOT EXISTS clean.clean_population (
     date integer NOT NULL,
     region_sido text NOT NULL,
     region_sigungu text NOT NULL,
-    population bigint NOT NULL,
-    is_gun smallint NOT NULL CHECK (is_gun IN (0, 1))
+    population bigint NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS clean_population_key
@@ -82,33 +78,66 @@ sido_by_prefix(region_prefix, region_sido) AS (
         ('45', '전북'), ('46', '전남'), ('47', '경북'), ('48', '경남'),
         ('50', '제주'), ('51', '강원'), ('52', '전북')
 ),
+missing_dates AS (
+    SELECT DISTINCT raw_pop."시점"::integer AS date
+    FROM raw.population AS raw_pop
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM clean.clean_population_sex_age AS existing
+        WHERE existing.date = raw_pop."시점"::integer
+    )
+       OR NOT EXISTS (
+        SELECT 1
+        FROM clean.clean_population_age AS existing
+        WHERE existing.date = raw_pop."시점"::integer
+    )
+       OR NOT EXISTS (
+        SELECT 1
+        FROM clean.clean_population_sex AS existing
+        WHERE existing.date = raw_pop."시점"::integer
+    )
+       OR NOT EXISTS (
+        SELECT 1
+        FROM clean.clean_population AS existing
+        WHERE existing.date = raw_pop."시점"::integer
+    )
+),
 raw_long AS (
     SELECT
-        "시점"::integer AS date,
-        btrim("C행정구역(시군구)별") AS region_code,
-        regexp_replace(coalesce("행정구역(시군구)별", ''), '[[:space:]]+', '', 'g') AS raw_region_sigungu,
-        regexp_replace(coalesce("연령별", ''), '[[:space:]]+', '', 'g') AS age_raw,
+        raw_pop."시점"::integer AS date,
+        btrim(raw_pop."C행정구역(시군구)별") AS region_code,
+        regexp_replace(coalesce(raw_pop."행정구역(시군구)별", ''), '[[:space:]]+', '', 'g')
+            AS raw_region_sigungu,
+        regexp_replace(coalesce(raw_pop."연령별", ''), '[[:space:]]+', '', 'g') AS age_raw,
         'all'::text AS sex,
-        NULLIF(replace("총인구수 (명)", ',', ''), '')::bigint AS population
-    FROM raw.population
+        NULLIF(replace(raw_pop."총인구수 (명)", ',', ''), '')::bigint AS population
+    FROM raw.population AS raw_pop
+    JOIN missing_dates AS md
+      ON raw_pop."시점"::integer = md.date
     UNION ALL
     SELECT
-        "시점"::integer AS date,
-        btrim("C행정구역(시군구)별") AS region_code,
-        regexp_replace(coalesce("행정구역(시군구)별", ''), '[[:space:]]+', '', 'g') AS raw_region_sigungu,
-        regexp_replace(coalesce("연령별", ''), '[[:space:]]+', '', 'g') AS age_raw,
+        raw_pop."시점"::integer AS date,
+        btrim(raw_pop."C행정구역(시군구)별") AS region_code,
+        regexp_replace(coalesce(raw_pop."행정구역(시군구)별", ''), '[[:space:]]+', '', 'g')
+            AS raw_region_sigungu,
+        regexp_replace(coalesce(raw_pop."연령별", ''), '[[:space:]]+', '', 'g') AS age_raw,
         'male'::text AS sex,
-        NULLIF(replace("남자인구수 (명)", ',', ''), '')::bigint AS population
-    FROM raw.population
+        NULLIF(replace(raw_pop."남자인구수 (명)", ',', ''), '')::bigint AS population
+    FROM raw.population AS raw_pop
+    JOIN missing_dates AS md
+      ON raw_pop."시점"::integer = md.date
     UNION ALL
     SELECT
-        "시점"::integer AS date,
-        btrim("C행정구역(시군구)별") AS region_code,
-        regexp_replace(coalesce("행정구역(시군구)별", ''), '[[:space:]]+', '', 'g') AS raw_region_sigungu,
-        regexp_replace(coalesce("연령별", ''), '[[:space:]]+', '', 'g') AS age_raw,
+        raw_pop."시점"::integer AS date,
+        btrim(raw_pop."C행정구역(시군구)별") AS region_code,
+        regexp_replace(coalesce(raw_pop."행정구역(시군구)별", ''), '[[:space:]]+', '', 'g')
+            AS raw_region_sigungu,
+        regexp_replace(coalesce(raw_pop."연령별", ''), '[[:space:]]+', '', 'g') AS age_raw,
         'female'::text AS sex,
-        NULLIF(replace("여자인구수 (명)", ',', ''), '')::bigint AS population
-    FROM raw.population
+        NULLIF(replace(raw_pop."여자인구수 (명)", ',', ''), '')::bigint AS population
+    FROM raw.population AS raw_pop
+    JOIN missing_dates AS md
+      ON raw_pop."시점"::integer = md.date
 ),
 prepared AS (
     SELECT
@@ -153,8 +182,7 @@ SELECT
     rk.region_sigungu,
     st.sex,
     st.age,
-    SUM(st.population)::bigint AS population,
-    rk.is_gun
+    SUM(st.population)::bigint AS population
 FROM standardized AS st
 JOIN region_merge_key AS rk
   ON st.region_sido = rk.region_sido
@@ -165,8 +193,7 @@ GROUP BY
     rk.region_sido,
     rk.region_sigungu,
     st.sex,
-    st.age,
-    rk.is_gun;
+    st.age;
 
 INSERT INTO clean.clean_population_sex_age (
     date,
@@ -174,8 +201,7 @@ INSERT INTO clean.clean_population_sex_age (
     region_sigungu,
     sex,
     age,
-    population,
-    is_gun
+    population
 )
 SELECT
     base.date,
@@ -183,8 +209,7 @@ SELECT
     base.region_sigungu,
     base.sex,
     base.age,
-    base.population,
-    base.is_gun
+    base.population
 FROM clean_population_sex_age_base AS base
 WHERE NOT EXISTS (
     SELECT 1
@@ -199,16 +224,14 @@ INSERT INTO clean.clean_population_age (
     region_sido,
     region_sigungu,
     age,
-    population,
-    is_gun
+    population
 )
 SELECT
     base.date,
     base.region_sido,
     base.region_sigungu,
     base.age,
-    base.population,
-    base.is_gun
+    base.population
 FROM clean_population_sex_age_base AS base
 WHERE base.sex = 'all'
   AND NOT EXISTS (
@@ -224,16 +247,14 @@ INSERT INTO clean.clean_population_sex (
     region_sido,
     region_sigungu,
     sex,
-    population,
-    is_gun
+    population
 )
 SELECT
     base.date,
     base.region_sido,
     base.region_sigungu,
     base.sex,
-    base.population,
-    base.is_gun
+    base.population
 FROM clean_population_sex_age_base AS base
 WHERE base.age = 'all'
   AND NOT EXISTS (
@@ -248,15 +269,13 @@ INSERT INTO clean.clean_population (
     date,
     region_sido,
     region_sigungu,
-    population,
-    is_gun
+    population
 )
 SELECT
     base.date,
     base.region_sido,
     base.region_sigungu,
-    base.population,
-    base.is_gun
+    base.population
 FROM clean_population_sex_age_base AS base
 WHERE base.sex = 'all'
   AND base.age = 'all'

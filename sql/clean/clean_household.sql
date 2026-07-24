@@ -6,8 +6,7 @@ CREATE TABLE IF NOT EXISTS clean.clean_household (
     date integer NOT NULL,
     region_sido text NOT NULL,
     region_sigungu text NOT NULL,
-    household bigint NOT NULL,
-    is_gun smallint NOT NULL CHECK (is_gun IN (0, 1))
+    household bigint NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS clean_household_key
@@ -45,15 +44,27 @@ sido_by_prefix(region_prefix, region_sido) AS (
         ('45', '전북'), ('46', '전남'), ('47', '경북'), ('48', '경남'),
         ('50', '제주'), ('51', '강원'), ('52', '전북')
 ),
+missing_dates AS (
+    SELECT DISTINCT raw_hh."시점"::integer AS date
+    FROM raw.household AS raw_hh
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM clean.clean_household AS existing
+        WHERE existing.date = raw_hh."시점"::integer
+    )
+),
 prepared AS (
     SELECT
-        "시점"::integer AS date,
-        btrim("C행정구역(시군구)별") AS region_code,
-        regexp_replace(coalesce("행정구역(시군구)별", ''), '[[:space:]]+', '', 'g') AS raw_region_sigungu,
-        NULLIF(replace("세대수 (세대)", ',', ''), '')::bigint AS household
-    FROM raw.household
-    WHERE length(btrim("C행정구역(시군구)별")) >= 5
-      AND btrim("C행정구역(시군구)별") NOT IN (
+        raw_hh."시점"::integer AS date,
+        btrim(raw_hh."C행정구역(시군구)별") AS region_code,
+        regexp_replace(coalesce(raw_hh."행정구역(시군구)별", ''), '[[:space:]]+', '', 'g')
+            AS raw_region_sigungu,
+        NULLIF(replace(raw_hh."세대수 (세대)", ',', ''), '')::bigint AS household
+    FROM raw.household AS raw_hh
+    JOIN missing_dates AS md
+      ON raw_hh."시점"::integer = md.date
+    WHERE length(btrim(raw_hh."C행정구역(시군구)별")) >= 5
+      AND btrim(raw_hh."C행정구역(시군구)별") NOT IN (
           SELECT region_code FROM dropped_region_codes
       )
 ),
@@ -75,8 +86,7 @@ SELECT
     st.date,
     rk.region_sido,
     rk.region_sigungu,
-    st.household,
-    rk.is_gun
+    st.household
 FROM standardized AS st
 JOIN region_merge_key AS rk
   ON st.region_sido = rk.region_sido
@@ -86,15 +96,13 @@ INSERT INTO clean.clean_household (
     date,
     region_sido,
     region_sigungu,
-    household,
-    is_gun
+    household
 )
 SELECT
     base.date,
     base.region_sido,
     base.region_sigungu,
-    base.household,
-    base.is_gun
+    base.household
 FROM clean_household_base AS base
 WHERE NOT EXISTS (
     SELECT 1
