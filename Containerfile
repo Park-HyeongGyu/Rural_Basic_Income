@@ -9,8 +9,6 @@ WORKDIR /app
 RUN python -m pip install --no-cache-dir --upgrade pip
 
 COPY pyproject.toml README.md ./
-COPY alembic.ini ./alembic.ini
-COPY migrations ./migrations
 COPY sql ./sql
 COPY src ./src
 

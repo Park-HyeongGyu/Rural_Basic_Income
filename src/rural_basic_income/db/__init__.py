@@ -1,2 +1,1 @@
-"""Database connection and migration helpers."""
-
+"""Database connection helpers."""
