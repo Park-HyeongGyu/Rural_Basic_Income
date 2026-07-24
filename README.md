@@ -2,55 +2,71 @@
 
 농어촌기본소득 연구용 자체 호스팅 웹 프로젝트입니다.
 
-현재 목표는 `v0.1.0`에서 월별 인구 CSV를 PostgreSQL에 적재하고, 정제 SQL을 거쳐 FastAPI와 Plotly.js 화면에서 지역별 인구 시계열을 확인하는 최소 수직 단면을 완성하는 것입니다.
+현재 `v0.2.0`의 목표는 `v0.1.0`에서 완성한 인구 시계열 웹 대시보드를 유지하면서, 수동 one-shot `rbi-worker`와 신규 지표 적재 기반을 추가하는 것입니다.
 
 ## Branch Workflow
 
-- `main`: 프로젝트 골격과 안정 기준점
-- `v0.1.0`: v0.1.0 기능 통합 브랜치
-- `feat/v0.1.0-*`: `v0.1.0`에서 분기하는 개별 기능 브랜치
+- `main`: 안정 릴리즈 기준점
+- `v0.2.0`: v0.2.0 기능 통합 브랜치
+- `feat/v0.2.0-*`: `v0.2.0`에서 분기하는 개별 기능 브랜치
 
-기능 구현은 `v0.1.0`에서 기능 브랜치를 만들고, 검증 후 다시 `v0.1.0`으로 머지합니다. `v0.1.0`이 완료되면 `main`으로 올립니다.
+기능 구현은 `v0.2.0`에서 기능 브랜치를 만들고, 검증 후 다시 `v0.2.0`으로 머지합니다.
 
 ## Scope
 
-v0.1.0에 포함되는 핵심 기능:
+이미 구현된 v0.1.0 기능:
 
 - FastAPI health check
 - PostgreSQL 연결
-- Alembic migration
-- 월별 인구 CSV 수동 적재
+- KOSIS 인구, 이동, 세대 raw import
 - raw to clean SQL transformation
 - 지역 목록 및 시계열 API
 - Jinja2, Vanilla JavaScript, Plotly.js 기반 그래프
 - Podman Quadlet 배포 골격
 
-v0.1.0에서 제외하는 기능:
+v0.2.0 목표:
 
+- SQL/pipeline 중심 구조 정리
+- `rbi-worker` console command 추가
+- `update`, `clean`, `export`, `status` 명령 골격
+- source x period 단위 raw transaction
+- dataset SQL file 단위 clean transaction 유지
+- source별 최신 period 탐색
+- clean CSV export 통합
+- 전력사용량, 지역화폐 결제정보, 인허가 데이터 추가
+
+v0.2.0에서 제외하는 기능:
+
+- systemd timer
 - Redis, Celery
-- 자동 데이터 갱신
-- 요청 시 회귀분석
-- 관리자 페이지
-- 로그인
+- 상시 실행 worker
+- 웹 요청 기반 분석
+- 지도 UI
+- 로그인 및 관리자 페이지
 - React 또는 Vue 기반 SPA
-- nginx 예시 설정
-
-자세한 인수인계 내용은 [docs/HANDOFF_v0.1.0.md](docs/HANDOFF_v0.1.0.md)를 확인합니다.
+- 별도 migration framework
+- 경제적, 통계적 runtime validation
 
 ## Repository Layout
 
 ```text
 .
+├── Containerfile
+├── README.md
+├── deploy/
+│   └── quadlet/
 ├── docs/
-├── src/rural_basic_income/
-│   ├── db/
-│   ├── pipeline/
-│   └── web/
-├── migrations/
 ├── sql/
-├── tests/
-└── deploy/
+│   └── clean/
+├── src/
+│   └── rural_basic_income/
+│       ├── db/
+│       ├── pipeline/
+│       └── web/
+└── tests/
 ```
+
+`docs/AI/`는 ignored 경로이며 ChatGPT Work와 Codex 사이의 handoff 문서에만 사용합니다.
 
 ## Local Development
 
@@ -87,6 +103,8 @@ The local database settings are:
 POSTGRES_USER=rbi
 POSTGRES_PASSWORD=passrbi
 POSTGRES_DB=rural_basic_income
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
 ```
 
 The actual `.env` file is ignored by Git. Use `.env.example` as the shared template.
@@ -108,7 +126,9 @@ systemctl --user start rbi-postgres.service
 systemctl --user status rbi-postgres.service
 ```
 
-## KOSIS API
+## Current Data Commands
+
+Until the v0.2.0 worker CLI is added, existing pipeline modules remain available.
 
 Put the KOSIS OpenAPI key in the ignored local `.env` file:
 
@@ -138,29 +158,29 @@ Run the clean SQL pipeline after raw data is ready:
 
 ## Container Image
 
-Build the v0.1.0 web image locally:
+Build the v0.2.0 image locally:
 
 ```bash
-podman build -t localhost/rural-basic-income:0.1.0 -f Containerfile .
+podman build -t localhost/rural-basic-income:0.2.0 -f Containerfile .
 ```
 
 Move the image to another machine with a tar archive:
 
 ```bash
-podman save localhost/rural-basic-income:0.1.0 -o rural-basic-income-0.1.0.tar
-rsync -av rural-basic-income-0.1.0.tar user@server:/tmp/
-ssh user@server 'podman load -i /tmp/rural-basic-income-0.1.0.tar'
+podman save localhost/rural-basic-income:0.2.0 -o rural-basic-income-0.2.0.tar
+rsync -av rural-basic-income-0.2.0.tar user@server:/tmp/
+ssh user@server 'podman load -i /tmp/rural-basic-income-0.2.0.tar'
 ```
 
 Or stream it over SSH without leaving a tar file locally:
 
 ```bash
-podman save localhost/rural-basic-income:0.1.0 | ssh user@server 'podman load'
+podman save localhost/rural-basic-income:0.2.0 | ssh user@server 'podman load'
 ```
 
 ## Quadlet Deployment
 
-The v0.1.0 deployment assumes the PostgreSQL volume already exists on the server and contains the imported raw and clean tables. Install the pod, database, and web Quadlet files:
+The deployment assumes the PostgreSQL volume already exists on the server and contains the imported raw and clean tables. Install the pod, database, and web Quadlet files:
 
 ```bash
 mkdir -p ~/.config/containers/systemd

@@ -109,7 +109,7 @@ def fetch_statistics_parameter_data(
     url = build_statistics_parameter_url(params, api_key=api_key)
     request = Request(
         url,
-        headers={"User-Agent": "rural-basic-income/0.1.0"},
+        headers={"User-Agent": "rural-basic-income/0.2.0"},
     )
 
     for attempt_index in range(max_retries + 1):
