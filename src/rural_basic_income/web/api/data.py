@@ -4,7 +4,7 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,13 +17,14 @@ REGION_MERGE_KEY_PATH = (
     PROJECT_ROOT / "src" / "rural_basic_income" / "pipeline" / "region_merge_key.csv"
 )
 BASE_SERIES_COLUMNS = ("date", "region_sido", "region_sigungu")
-FILTER_COLUMNS = ("sex", "age")
+FILTER_COLUMNS = ("sex", "age", "contract_type")
 NON_VARIABLE_COLUMNS = {
     "date",
     "region_sido",
     "region_sigungu",
     "sex",
     "age",
+    "contract_type",
     "is_gun",
 }
 NUMERIC_DATA_TYPES = {
@@ -47,6 +48,42 @@ VARIABLE_LABELS = {
     "inter_sido_outflow": "시도간 전출",
     "payment_amount": "결제금액",
     "payment_count": "결제건수",
+    "customer_count": "고객호수",
+    "power_usage": "전력사용량",
+    "bill": "전기요금",
+    "unit_cost": "평균단가",
+    "contract_power": "계약전력",
+}
+FILTER_LABELS = {
+    "sex": "성별",
+    "age": "연령",
+    "contract_type": "계약종별",
+}
+FILTER_VALUE_LABELS = {
+    "sex": {
+        "all": "전체",
+        "male": "남자",
+        "female": "여자",
+        "unknown": "미상",
+    },
+    "age": {
+        "all": "전체",
+        "60-": "60세 이상",
+        "80-": "80세 이상",
+        "unknown": "미상",
+    },
+}
+FILTER_VALUE_ORDER = {
+    "sex": ("all", "male", "female", "unknown"),
+    "contract_type": (
+        "주택용",
+        "일반용",
+        "산업용",
+        "농사용",
+        "교육용",
+        "가로등",
+        "심야",
+    ),
 }
 
 router = APIRouter(prefix="/api", tags=["data"])
@@ -126,11 +163,98 @@ def selectable_variables(columns: list[dict[str, str]]) -> list[dict[str, str]]:
     return variables
 
 
+def filter_columns(columns: list[dict[str, str]]) -> list[str]:
+    column_names = {column["name"] for column in columns}
+    return [column for column in FILTER_COLUMNS if column in column_names]
+
+
+def leading_integer(value: str) -> int | None:
+    digits = []
+    for char in value:
+        if char.isdigit():
+            digits.append(char)
+        else:
+            break
+    if not digits:
+        return None
+    return int("".join(digits))
+
+
+def filter_value_sort_key(filter_name: str, value: str) -> tuple[int, int | str]:
+    ordered_values = FILTER_VALUE_ORDER.get(filter_name)
+    if ordered_values and value in ordered_values:
+        return (0, ordered_values.index(value))
+    if value == "all":
+        return (0, -1)
+    if value == "unknown":
+        return (2, value)
+
+    numeric_prefix = leading_integer(value)
+    if numeric_prefix is not None:
+        return (1, numeric_prefix)
+    return (1, value)
+
+
+def filter_value_label(filter_name: str, value: str) -> str:
+    label_map = FILTER_VALUE_LABELS.get(filter_name, {})
+    if value in label_map:
+        return label_map[value]
+    if filter_name == "age":
+        return f"{value}세"
+    return value
+
+
+def filter_values(
+    connection: Connection,
+    table_name: str,
+    filter_name: str,
+) -> list[dict[str, str]]:
+    values = [
+        value
+        for value in connection.execute(
+            text(
+                f"""
+                SELECT DISTINCT {quote_identifier(filter_name)} AS filter_value
+                FROM {qualified_table_name(table_name)}
+                WHERE {quote_identifier(filter_name)} IS NOT NULL
+                """
+            )
+        ).scalars()
+        if value is not None
+    ]
+    values = sorted(
+        {str(value) for value in values},
+        key=lambda value: filter_value_sort_key(filter_name, value),
+    )
+    return [
+        {
+            "value": value,
+            "label": filter_value_label(filter_name, value),
+        }
+        for value in values
+    ]
+
+
+def filter_metadata(
+    connection: Connection,
+    table_name: str,
+    columns: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": column,
+            "label": FILTER_LABELS.get(column, column),
+            "values": filter_values(connection, table_name, column),
+        }
+        for column in filter_columns(columns)
+    ]
+
+
 def dimension_columns(columns: list[dict[str, str]]) -> list[str]:
     column_names = {column["name"] for column in columns}
     dimensions = [
         column
-        for column in (*BASE_SERIES_COLUMNS, *FILTER_COLUMNS)
+        for column in (*BASE_SERIES_COLUMNS, *filter_columns(columns))
         if column in column_names
     ]
     return dimensions
@@ -182,6 +306,7 @@ def clean_table_metadata(connection: Connection, table_name: str) -> dict[str, A
         "table": f"{CLEAN_SCHEMA}.{table_name}",
         "columns": columns,
         "dimensions": dimension_columns(columns),
+        "filters": filter_metadata(connection, table_name, columns),
         "selectable_variables": selectable_variables(columns),
         **status_values,
     }
@@ -237,12 +362,11 @@ def data_status() -> dict[str, Any]:
 
 @router.get("/series")
 def series(
+    request: Request,
     region_sido: str = Query(...),
     region_sigungu: str = Query(...),
     table: str = Query("clean_population"),
     variable: str = Query("population"),
-    sex: str | None = Query(None),
-    age: str | None = Query(None),
 ) -> dict[str, Any]:
     table_name = normalize_table_name(table)
 
@@ -293,14 +417,39 @@ def series(
                 "region_sigungu": region_sigungu,
             }
 
-            if "sex" in columns:
-                filters["sex"] = sex or "all"
-                where_clauses.append("sex = :sex")
-                params["sex"] = filters["sex"]
-            if "age" in columns:
-                filters["age"] = age or "all"
-                where_clauses.append("age = :age")
-                params["age"] = filters["age"]
+            for filter_def in metadata["filters"]:
+                filter_name = filter_def["name"]
+                allowed_values = {
+                    item["value"]
+                    for item in filter_def["values"]
+                }
+                if not allowed_values:
+                    continue
+
+                requested_value = request.query_params.get(filter_name)
+                if requested_value is None:
+                    requested_value = (
+                        "all"
+                        if "all" in allowed_values
+                        else filter_def["values"][0]["value"]
+                    )
+
+                if requested_value not in allowed_values:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "message": "filter value is not selectable for this table",
+                            "filter": filter_name,
+                            "allowed_values": sorted(allowed_values),
+                        },
+                    )
+
+                param_name = f"filter_{filter_name}"
+                filters[filter_name] = requested_value
+                where_clauses.append(
+                    f"{quote_identifier(filter_name)} = :{param_name}"
+                )
+                params[param_name] = requested_value
 
             value_column = quote_identifier(variable)
             query = text(

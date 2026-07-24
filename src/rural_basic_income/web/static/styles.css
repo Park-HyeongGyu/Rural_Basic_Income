@@ -97,6 +97,15 @@ h2 {
   gap: 12px;
 }
 
+.filter-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.filter-grid:empty {
+  display: none;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -256,7 +265,7 @@ button:focus-visible {
 
 .status-table {
   width: 100%;
-  min-width: 760px;
+  min-width: 900px;
   border-collapse: collapse;
 }
 
@@ -292,6 +301,7 @@ button:focus-visible {
   border-radius: 6px;
   background: var(--accent-soft);
   padding: 0 8px;
+  white-space: nowrap;
 }
 
 .is-hidden {
