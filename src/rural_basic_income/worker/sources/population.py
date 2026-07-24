@@ -3,18 +3,16 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from rural_basic_income.pipeline.kosis_raw import (
-    POPULATION_SPEC,
-    base_params,
-    dedupe_preserve_order,
-    make_chunks,
-    validate_period,
-)
 from rural_basic_income.worker.download import SourcePeriodDownload
+from rural_basic_income.worker.periods import validate_period
 from rural_basic_income.worker.sources._kosis import (
+    POPULATION_SPEC,
     KosisDownloadError,
     KosisPayloadChunks,
+    base_params,
+    dedupe_preserve_order,
     fetch_rows,
+    make_chunks,
     make_source_period_download,
 )
 

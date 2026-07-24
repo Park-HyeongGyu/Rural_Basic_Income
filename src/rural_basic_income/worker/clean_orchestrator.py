@@ -12,13 +12,19 @@ from rural_basic_income.db.connection import get_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REGION_MERGE_KEY_PATH = (
-    PROJECT_ROOT / "src" / "rural_basic_income" / "pipeline" / "region_merge_key.csv"
+    PROJECT_ROOT
+    / "src"
+    / "rural_basic_income"
+    / "worker"
+    / "resources"
+    / "region_merge_key.csv"
 )
 LOCAL_CURRENCY_REGION_CODES_PATH = (
     PROJECT_ROOT
     / "src"
     / "rural_basic_income"
-    / "pipeline"
+    / "worker"
+    / "resources"
     / "local_currency_region_codes.csv"
 )
 CLEAN_SQL_LOCK_KEY = "rural_basic_income.clean_sql"

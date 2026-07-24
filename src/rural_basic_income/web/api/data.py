@@ -14,7 +14,12 @@ from rural_basic_income.db.connection import get_engine
 CLEAN_SCHEMA = "clean"
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 REGION_MERGE_KEY_PATH = (
-    PROJECT_ROOT / "src" / "rural_basic_income" / "pipeline" / "region_merge_key.csv"
+    PROJECT_ROOT
+    / "src"
+    / "rural_basic_income"
+    / "worker"
+    / "resources"
+    / "region_merge_key.csv"
 )
 BASE_SERIES_COLUMNS = ("date", "region_sido", "region_sigungu")
 FILTER_COLUMNS = ("sex", "age", "contract_type")

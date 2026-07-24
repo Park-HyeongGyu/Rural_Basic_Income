@@ -11,11 +11,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from rural_basic_income.config import Settings, get_settings
-from rural_basic_income.pipeline.kosis_raw import validate_period
 from rural_basic_income.worker.download import (
     PayloadChunk,
     SourcePeriodDownload,
 )
+from rural_basic_income.worker.periods import validate_period
 
 # Source: KEPCO Bigdata 계약종별 전력사용량.
 SOURCE_NAME = "electricity"

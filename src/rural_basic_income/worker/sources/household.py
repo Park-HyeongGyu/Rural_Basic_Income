@@ -3,18 +3,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from rural_basic_income.pipeline.kosis_raw import (
+from rural_basic_income.worker.periods import validate_period
+from rural_basic_income.worker.sources._kosis import (
     HOUSEHOLD_SPEC,
+    KosisPayloadChunks,
     base_params,
     dedupe_preserve_order,
-    validate_period,
-)
-from rural_basic_income.worker.download import SourcePeriodDownload
-from rural_basic_income.worker.sources._kosis import (
-    KosisPayloadChunks,
     fetch_rows,
     make_source_period_download,
 )
+from rural_basic_income.worker.download import SourcePeriodDownload
 
 # Source: KOSIS 행정구역(시군구)별 주민등록세대수.
 SPEC = HOUSEHOLD_SPEC

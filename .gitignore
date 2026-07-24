@@ -28,6 +28,7 @@ dist/
 *.tar
 *.tar.gz
 *.tgz
+migrations/
 
 # Project runtime outputs
 data/

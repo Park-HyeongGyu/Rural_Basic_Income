@@ -8,8 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rural_basic_income.db.connection import get_engine
-from rural_basic_income.pipeline.kosis_raw import iter_month_periods, validate_period
 from rural_basic_income.worker.download import SourcePeriodDownload
+from rural_basic_income.worker.periods import iter_month_periods, validate_period
 from rural_basic_income.worker import raw_writer
 from rural_basic_income.worker.sources import (
     electricity,

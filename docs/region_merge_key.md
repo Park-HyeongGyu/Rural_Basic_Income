@@ -1,6 +1,6 @@
 # Region Merge Key
 
-`src/rural_basic_income/pipeline/region_merge_key.csv`는 인구, 세대, 이동자 데이터를 결합할 때 사용할 최종 지역 기준표이다.
+`src/rural_basic_income/worker/resources/region_merge_key.csv`는 인구, 세대, 이동자 데이터를 결합할 때 사용할 최종 지역 기준표이다.
 
 ## 기준
 

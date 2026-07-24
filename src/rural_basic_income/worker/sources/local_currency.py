@@ -12,8 +12,8 @@ from urllib.parse import urlencode, unquote
 from urllib.request import Request, urlopen
 
 from rural_basic_income.config import Settings, get_settings
-from rural_basic_income.pipeline.kosis_raw import validate_period
 from rural_basic_income.worker.download import PayloadChunk, SourcePeriodDownload
+from rural_basic_income.worker.periods import validate_period
 
 # Source: data.go.kr 한국조폐공사 지역사랑상품권 결제정보.
 SOURCE_NAME = "local_currency"
