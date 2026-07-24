@@ -12,6 +12,7 @@ Image=localhost/rural-basic-income:0.2.0
 Pod=rbi-pod.pod
 EnvironmentFile=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/.env
 Environment=APP_ENV=production
+Exec=uvicorn rural_basic_income.web.main:app --host 0.0.0.0 --port 8000
 HealthCmd=python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=5).read()"
 HealthInterval=30s
 HealthTimeout=5s
