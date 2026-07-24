@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from rural_basic_income.pipeline.kosis_raw import (
     POPULATION_SPEC,
     base_params,
+    dedupe_preserve_order,
     make_chunks,
     validate_period,
 )
 from rural_basic_income.worker.download import SourcePeriodDownload
-from rural_basic_income.worker.sources.household import (
-    extract_region_codes,
-    fetch_household_payload,
-)
 from rural_basic_income.worker.sources._kosis import (
     KosisDownloadError,
     KosisPayloadChunks,
@@ -24,6 +22,16 @@ from rural_basic_income.worker.sources._kosis import (
 SPEC = POPULATION_SPEC
 
 
+def extract_region_codes(rows: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
+    return tuple(
+        dedupe_preserve_order(
+            str(row["C1"])
+            for row in rows
+            if row.get("C1")
+        )
+    )
+
+
 def get_region_codes(
     period: str,
     *,
@@ -31,8 +39,14 @@ def get_region_codes(
     timeout: float,
     max_retries: int,
 ) -> tuple[str, ...]:
-    _params, rows = fetch_household_payload(
-        period,
+    validated_period = validate_period(period)
+    params = {
+        **base_params(SPEC, validated_period),
+        "objL1": "ALL",
+        "objL2": "000",
+    }
+    rows = fetch_rows(
+        params,
         request_sleep_seconds=request_sleep_seconds,
         timeout=timeout,
         max_retries=max_retries,
@@ -40,7 +54,7 @@ def get_region_codes(
     region_codes = extract_region_codes(rows)
     if not region_codes:
         raise KosisDownloadError(
-            f"KOSIS household source returned no region codes for {period}"
+            f"KOSIS population source returned no region codes for {period}"
         )
     return region_codes
 

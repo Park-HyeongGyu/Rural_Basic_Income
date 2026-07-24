@@ -155,7 +155,7 @@ def test_download_sources_return_in_memory_batches(
     ]
 
 
-def test_population_download_uses_household_only_for_region_codes(
+def test_population_download_uses_population_table_region_codes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[Mapping[str, str]] = []
@@ -168,25 +168,44 @@ def test_population_download_uses_household_only_for_region_codes(
     ) -> list[dict[str, Any]]:
         calls.append(dict(params))
         period = params["startPrdDe"]
-        if params["tblId"] == "DT_1B040B3":
+        assert params["tblId"] == "DT_1B04006"
+
+        if params["objL1"] == "ALL":
+            assert params["objL2"] == "000"
             return [
                 {
                     "PRD_DE": period,
                     "C1_OBJ_NM": "행정구역",
                     "C1": "11110",
                     "C1_NM": "서울 종로구",
-                    "ITM_NM": "세대수",
-                    "UNIT_NM": "가구",
-                    "DT": "10",
+                    "C2_OBJ_NM": "연령별",
+                    "C2": "000",
+                    "C2_NM": "계",
+                    "ITM_NM": "총인구",
+                    "UNIT_NM": "명",
+                    "DT": "100",
+                },
+                {
+                    "PRD_DE": period,
+                    "C1_OBJ_NM": "행정구역",
+                    "C1": "11140",
+                    "C1_NM": "서울 중구",
+                    "C2_OBJ_NM": "연령별",
+                    "C2": "000",
+                    "C2_NM": "계",
+                    "ITM_NM": "총인구",
+                    "UNIT_NM": "명",
+                    "DT": "200",
                 }
             ]
 
+        assert params["objL2"] == "ALL"
         return [
             {
                 "PRD_DE": period,
                 "C1_OBJ_NM": "행정구역",
-                "C1": "11110",
-                "C1_NM": "서울 종로구",
+                "C1": params["objL1"],
+                "C1_NM": f"지역 {params['objL1']}",
                 "C2_OBJ_NM": "연령별",
                 "C2": "000",
                 "C2_NM": "계",
@@ -204,11 +223,113 @@ def test_population_download_uses_household_only_for_region_codes(
 
     result = population.download_population(
         "202604",
+        chunk_size=1,
         request_sleep_seconds=0,
     )
 
     assert result.source_name == "population"
-    assert [call["tblId"] for call in calls] == ["DT_1B040B3", "DT_1B04006"]
+    assert [call["tblId"] for call in calls] == [
+        "DT_1B04006",
+        "DT_1B04006",
+        "DT_1B04006",
+    ]
+    assert calls[0]["objL1"] == "ALL"
+    assert calls[1]["objL1"] == "11110"
+    assert calls[2]["objL1"] == "11140"
+
+
+def test_mover_download_uses_mover_table_region_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Mapping[str, str]] = []
+
+    def fake_fetch_statistics_parameter_data(
+        params: Mapping[str, str],
+        *,
+        timeout: float = 30,
+        max_retries: int = 5,
+    ) -> list[dict[str, Any]]:
+        calls.append(dict(params))
+        period = params["startPrdDe"]
+        assert params["tblId"] == "DT_1B26001"
+
+        if params["objL1"] == "ALL":
+            assert params["objL2"] == "0"
+            assert params["objL3"] == "000"
+            return [
+                {
+                    "PRD_DE": period,
+                    "C1_OBJ_NM": "행정구역",
+                    "C1": "11110",
+                    "C1_NM": "서울 종로구",
+                    "C2_OBJ_NM": "성별",
+                    "C2": "0",
+                    "C2_NM": "계",
+                    "C3_OBJ_NM": "연령별",
+                    "C3": "000",
+                    "C3_NM": "계",
+                    "ITM_NM": "총전입",
+                    "UNIT_NM": "명",
+                    "DT": "5",
+                },
+                {
+                    "PRD_DE": period,
+                    "C1_OBJ_NM": "행정구역",
+                    "C1": "11140",
+                    "C1_NM": "서울 중구",
+                    "C2_OBJ_NM": "성별",
+                    "C2": "0",
+                    "C2_NM": "계",
+                    "C3_OBJ_NM": "연령별",
+                    "C3": "000",
+                    "C3_NM": "계",
+                    "ITM_NM": "총전입",
+                    "UNIT_NM": "명",
+                    "DT": "6",
+                },
+            ]
+
+        assert params["objL2"] == "ALL"
+        assert params["objL3"] == "ALL"
+        return [
+            {
+                "PRD_DE": period,
+                "C1_OBJ_NM": "행정구역",
+                "C1": params["objL1"],
+                "C1_NM": f"지역 {params['objL1']}",
+                "C2_OBJ_NM": "성별",
+                "C2": "0",
+                "C2_NM": "계",
+                "C3_OBJ_NM": "연령별",
+                "C3": "000",
+                "C3_NM": "계",
+                "ITM_NM": "총전입",
+                "UNIT_NM": "명",
+                "DT": "5",
+            }
+        ]
+
+    monkeypatch.setattr(
+        _kosis,
+        "fetch_statistics_parameter_data",
+        fake_fetch_statistics_parameter_data,
+    )
+
+    result = mover.download_mover(
+        "202604",
+        chunk_size=1,
+        request_sleep_seconds=0,
+    )
+
+    assert result.source_name == "mover"
+    assert [call["tblId"] for call in calls] == [
+        "DT_1B26001",
+        "DT_1B26001",
+        "DT_1B26001",
+    ]
+    assert calls[0]["objL1"] == "ALL"
+    assert calls[1]["objL1"] == "11110"
+    assert calls[2]["objL1"] == "11140"
 
 
 def test_mover_download_accepts_preloaded_region_codes(

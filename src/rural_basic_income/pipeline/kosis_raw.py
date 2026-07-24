@@ -222,11 +222,39 @@ def fetch_kosis_raw_payloads(
         "objL1": "ALL",
     }
     household_rows = fetch_rows(household_params)
-    region_codes = dedupe_preserve_order(
+
+    population_region_params = {
+        **base_params(POPULATION_SPEC, period),
+        "objL1": "ALL",
+        "objL2": "000",
+    }
+    population_region_rows = fetch_rows(population_region_params)
+    population_region_codes = dedupe_preserve_order(
         str(row["C1"])
-        for row in household_rows
+        for row in population_region_rows
         if row.get("C1")
     )
+    if not population_region_codes:
+        raise RuntimeError(
+            f"KOSIS population source returned no region codes for {period}"
+        )
+
+    mover_region_params = {
+        **base_params(MOVER_SPEC, period),
+        "objL1": "ALL",
+        "objL2": "0",
+        "objL3": "000",
+    }
+    mover_region_rows = fetch_rows(mover_region_params)
+    mover_region_codes = dedupe_preserve_order(
+        str(row["C1"])
+        for row in mover_region_rows
+        if row.get("C1")
+    )
+    if not mover_region_codes:
+        raise RuntimeError(
+            f"KOSIS mover source returned no region codes for {period}"
+        )
 
     payloads: dict[str, list[tuple[dict[str, str], list[dict[str, Any]]]]] = {
         HOUSEHOLD_SPEC.source_name: [(household_params, household_rows)],
@@ -234,7 +262,7 @@ def fetch_kosis_raw_payloads(
         MOVER_SPEC.source_name: [],
     }
 
-    for chunk in make_chunks(region_codes, population_chunk_size):
+    for chunk in make_chunks(population_region_codes, population_chunk_size):
         params = {
             **base_params(POPULATION_SPEC, period),
             "objL1": "+".join(chunk),
@@ -244,7 +272,7 @@ def fetch_kosis_raw_payloads(
             (params, fetch_rows(params))
         )
 
-    for chunk in make_chunks(region_codes, mover_chunk_size):
+    for chunk in make_chunks(mover_region_codes, mover_chunk_size):
         params = {
             **base_params(MOVER_SPEC, period),
             "objL1": "+".join(chunk),
