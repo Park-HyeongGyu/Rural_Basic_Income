@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     database_url: str | None = None
     kosis_api_key: str | None = None
+    kepco_api_key: str | None = None
 
     @property
     def sqlalchemy_database_url(self) -> str:
