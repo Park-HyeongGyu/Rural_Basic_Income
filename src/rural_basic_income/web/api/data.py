@@ -45,6 +45,8 @@ VARIABLE_LABELS = {
     "intra_sido_outflow": "시도내 시군구간 전출",
     "inter_sido_inflow": "시도간 전입",
     "inter_sido_outflow": "시도간 전출",
+    "payment_amount": "결제금액",
+    "payment_count": "결제건수",
 }
 
 router = APIRouter(prefix="/api", tags=["data"])
@@ -128,7 +130,7 @@ def dimension_columns(columns: list[dict[str, str]]) -> list[str]:
     column_names = {column["name"] for column in columns}
     dimensions = [
         column
-        for column in (*BASE_SERIES_COLUMNS, *FILTER_COLUMNS, "is_gun")
+        for column in (*BASE_SERIES_COLUMNS, *FILTER_COLUMNS)
         if column in column_names
     ]
     return dimensions

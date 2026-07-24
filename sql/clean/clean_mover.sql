@@ -15,8 +15,7 @@ CREATE TABLE IF NOT EXISTS clean.clean_mover_sex_age (
     intra_sido_inflow bigint NOT NULL,
     intra_sido_outflow bigint NOT NULL,
     inter_sido_inflow bigint NOT NULL,
-    inter_sido_outflow bigint NOT NULL,
-    is_gun smallint NOT NULL CHECK (is_gun IN (0, 1))
+    inter_sido_outflow bigint NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS clean_mover_sex_age_key
@@ -34,8 +33,7 @@ CREATE TABLE IF NOT EXISTS clean.clean_mover_age (
     intra_sido_inflow bigint NOT NULL,
     intra_sido_outflow bigint NOT NULL,
     inter_sido_inflow bigint NOT NULL,
-    inter_sido_outflow bigint NOT NULL,
-    is_gun smallint NOT NULL CHECK (is_gun IN (0, 1))
+    inter_sido_outflow bigint NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS clean_mover_age_key
@@ -53,8 +51,7 @@ CREATE TABLE IF NOT EXISTS clean.clean_mover_sex (
     intra_sido_inflow bigint NOT NULL,
     intra_sido_outflow bigint NOT NULL,
     inter_sido_inflow bigint NOT NULL,
-    inter_sido_outflow bigint NOT NULL,
-    is_gun smallint NOT NULL CHECK (is_gun IN (0, 1))
+    inter_sido_outflow bigint NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS clean_mover_sex_key
@@ -71,8 +68,7 @@ CREATE TABLE IF NOT EXISTS clean.clean_mover (
     intra_sido_inflow bigint NOT NULL,
     intra_sido_outflow bigint NOT NULL,
     inter_sido_inflow bigint NOT NULL,
-    inter_sido_outflow bigint NOT NULL,
-    is_gun smallint NOT NULL CHECK (is_gun IN (0, 1))
+    inter_sido_outflow bigint NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS clean_mover_key
@@ -90,20 +86,50 @@ sido_by_prefix(region_prefix, region_sido) AS (
         ('45', '전북'), ('46', '전남'), ('47', '경북'), ('48', '경남'),
         ('50', '제주'), ('51', '강원'), ('52', '전북')
 ),
+missing_dates AS (
+    SELECT DISTINCT raw_mv."시점"::integer AS date
+    FROM raw.mover AS raw_mv
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM clean.clean_mover_sex_age AS existing
+        WHERE existing.date = raw_mv."시점"::integer
+    )
+       OR NOT EXISTS (
+        SELECT 1
+        FROM clean.clean_mover_age AS existing
+        WHERE existing.date = raw_mv."시점"::integer
+    )
+       OR NOT EXISTS (
+        SELECT 1
+        FROM clean.clean_mover_sex AS existing
+        WHERE existing.date = raw_mv."시점"::integer
+    )
+       OR NOT EXISTS (
+        SELECT 1
+        FROM clean.clean_mover AS existing
+        WHERE existing.date = raw_mv."시점"::integer
+    )
+),
 prepared AS (
     SELECT
-        "시점"::integer AS date,
-        btrim("C행정구역(시군구)별") AS region_code,
-        regexp_replace(coalesce("행정구역(시군구)별", ''), '[[:space:]]+', '', 'g') AS raw_region_sigungu,
-        regexp_replace(coalesce("성별", ''), '[[:space:]]+', '', 'g') AS sex_raw,
-        regexp_replace(coalesce("연령별", ''), '[[:space:]]+', '', 'g') AS age_raw,
-        NULLIF(replace("시도내이동-시군구내 (명)", ',', ''), '')::bigint AS within_sigungu_migration,
-        NULLIF(replace("시도내이동-시군구간 전입 (명)", ',', ''), '')::bigint AS intra_sido_inflow,
-        NULLIF(replace("시도내이동-시군구간 전출 (명)", ',', ''), '')::bigint AS intra_sido_outflow,
-        NULLIF(replace("시도간전입 (명)", ',', ''), '')::bigint AS inter_sido_inflow,
-        NULLIF(replace("시도간전출 (명)", ',', ''), '')::bigint AS inter_sido_outflow
-    FROM raw.mover
-    WHERE length(btrim("C행정구역(시군구)별")) >= 5
+        raw_mv."시점"::integer AS date,
+        btrim(raw_mv."C행정구역(시군구)별") AS region_code,
+        regexp_replace(coalesce(raw_mv."행정구역(시군구)별", ''), '[[:space:]]+', '', 'g')
+            AS raw_region_sigungu,
+        regexp_replace(coalesce(raw_mv."성별", ''), '[[:space:]]+', '', 'g') AS sex_raw,
+        regexp_replace(coalesce(raw_mv."연령별", ''), '[[:space:]]+', '', 'g') AS age_raw,
+        NULLIF(replace(raw_mv."시도내이동-시군구내 (명)", ',', ''), '')::bigint
+            AS within_sigungu_migration,
+        NULLIF(replace(raw_mv."시도내이동-시군구간 전입 (명)", ',', ''), '')::bigint
+            AS intra_sido_inflow,
+        NULLIF(replace(raw_mv."시도내이동-시군구간 전출 (명)", ',', ''), '')::bigint
+            AS intra_sido_outflow,
+        NULLIF(replace(raw_mv."시도간전입 (명)", ',', ''), '')::bigint AS inter_sido_inflow,
+        NULLIF(replace(raw_mv."시도간전출 (명)", ',', ''), '')::bigint AS inter_sido_outflow
+    FROM raw.mover AS raw_mv
+    JOIN missing_dates AS md
+      ON raw_mv."시점"::integer = md.date
+    WHERE length(btrim(raw_mv."C행정구역(시군구)별")) >= 5
 ),
 standardized AS (
     SELECT
@@ -154,8 +180,7 @@ SELECT
     SUM(st.intra_sido_inflow)::bigint AS intra_sido_inflow,
     SUM(st.intra_sido_outflow)::bigint AS intra_sido_outflow,
     SUM(st.inter_sido_inflow)::bigint AS inter_sido_inflow,
-    SUM(st.inter_sido_outflow)::bigint AS inter_sido_outflow,
-    rk.is_gun
+    SUM(st.inter_sido_outflow)::bigint AS inter_sido_outflow
 FROM standardized AS st
 JOIN region_merge_key AS rk
   ON st.region_sido = rk.region_sido
@@ -167,8 +192,7 @@ GROUP BY
     rk.region_sido,
     rk.region_sigungu,
     st.sex,
-    st.age,
-    rk.is_gun;
+    st.age;
 
 INSERT INTO clean.clean_mover_sex_age (
     date,
@@ -183,8 +207,7 @@ INSERT INTO clean.clean_mover_sex_age (
     intra_sido_inflow,
     intra_sido_outflow,
     inter_sido_inflow,
-    inter_sido_outflow,
-    is_gun
+    inter_sido_outflow
 )
 SELECT
     base.date,
@@ -199,8 +222,7 @@ SELECT
     base.intra_sido_inflow,
     base.intra_sido_outflow,
     base.inter_sido_inflow,
-    base.inter_sido_outflow,
-    base.is_gun
+    base.inter_sido_outflow
 FROM clean_mover_sex_age_base AS base
 WHERE NOT EXISTS (
     SELECT 1
@@ -222,8 +244,7 @@ INSERT INTO clean.clean_mover_age (
     intra_sido_inflow,
     intra_sido_outflow,
     inter_sido_inflow,
-    inter_sido_outflow,
-    is_gun
+    inter_sido_outflow
 )
 SELECT
     base.date,
@@ -237,8 +258,7 @@ SELECT
     base.intra_sido_inflow,
     base.intra_sido_outflow,
     base.inter_sido_inflow,
-    base.inter_sido_outflow,
-    base.is_gun
+    base.inter_sido_outflow
 FROM clean_mover_sex_age_base AS base
 WHERE base.sex = 'all'
   AND NOT EXISTS (
@@ -261,8 +281,7 @@ INSERT INTO clean.clean_mover_sex (
     intra_sido_inflow,
     intra_sido_outflow,
     inter_sido_inflow,
-    inter_sido_outflow,
-    is_gun
+    inter_sido_outflow
 )
 SELECT
     base.date,
@@ -276,8 +295,7 @@ SELECT
     base.intra_sido_inflow,
     base.intra_sido_outflow,
     base.inter_sido_inflow,
-    base.inter_sido_outflow,
-    base.is_gun
+    base.inter_sido_outflow
 FROM clean_mover_sex_age_base AS base
 WHERE base.age = 'all'
   AND NOT EXISTS (
@@ -299,8 +317,7 @@ INSERT INTO clean.clean_mover (
     intra_sido_inflow,
     intra_sido_outflow,
     inter_sido_inflow,
-    inter_sido_outflow,
-    is_gun
+    inter_sido_outflow
 )
 SELECT
     base.date,
@@ -313,8 +330,7 @@ SELECT
     base.intra_sido_inflow,
     base.intra_sido_outflow,
     base.inter_sido_inflow,
-    base.inter_sido_outflow,
-    base.is_gun
+    base.inter_sido_outflow
 FROM clean_mover_sex_age_base AS base
 WHERE base.sex = 'all'
   AND base.age = 'all'
