@@ -46,6 +46,7 @@ v0.3.0에서 구현 중인 방향:
 - host user systemd timer가 `podman exec rbi-web rbi update --latest` 실행
 - scheduled updater container 제거
 - PyFixest 기반 traditional TWFE DiD 및 event-study core
+- clean table에서 선택 region, period, filter만 읽는 analysis data loader
 
 v0.3.0에서 현재 제외하는 기능:
 

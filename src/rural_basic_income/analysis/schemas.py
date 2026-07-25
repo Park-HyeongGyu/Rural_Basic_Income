@@ -1,9 +1,53 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Mapping
 
 from rural_basic_income.analysis.exceptions import AnalysisSpecError
 from rural_basic_income.worker.periods import iter_month_periods, validate_period
+
+
+CLEAN_SCHEMA = "clean"
+
+
+@dataclass(frozen=True)
+class AnalysisOutcome:
+    table: str
+    variable: str
+    filters: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        table = self.table.strip()
+        if table.startswith(f"{CLEAN_SCHEMA}."):
+            table = table.split(".", 1)[1]
+        if not table:
+            raise AnalysisSpecError("outcome table must not be empty")
+        if "." in table:
+            raise AnalysisSpecError(
+                f"outcome table must be in {CLEAN_SCHEMA} schema: {self.table}"
+            )
+
+        variable = self.variable.strip()
+        if not variable:
+            raise AnalysisSpecError("outcome variable must not be empty")
+
+        filters = {
+            str(key).strip(): str(value).strip()
+            for key, value in self.filters.items()
+        }
+        empty_filter_keys = [key for key in filters if not key]
+        empty_filter_values = [key for key, value in filters.items() if not value]
+        if empty_filter_keys:
+            raise AnalysisSpecError("outcome filter names must not be empty")
+        if empty_filter_values:
+            raise AnalysisSpecError(
+                "outcome filter values must not be empty: "
+                + ", ".join(sorted(empty_filter_values))
+            )
+
+        object.__setattr__(self, "table", table)
+        object.__setattr__(self, "variable", variable)
+        object.__setattr__(self, "filters", filters)
 
 
 @dataclass(frozen=True, order=True)
