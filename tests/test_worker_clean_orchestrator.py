@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from rural_basic_income.worker import clean_orchestrator
+
+
+class RecordingConnection:
+    def __init__(self, *, fail_on_statement: str | None = None) -> None:
+        self.fail_on_statement = fail_on_statement
+        self.calls: list[tuple[str, Any, Any]] = []
+
+    def execution_options(self, **kwargs):
+        self.calls.append(("execution_options", kwargs, None))
+        return self
+
+    def execute(self, statement, parameters=None):
+        self.calls.append(("execute", str(statement), parameters))
+        return object()
+
+    def exec_driver_sql(self, statement: str):
+        self.calls.append(("exec_driver_sql", statement, None))
+        if statement == self.fail_on_statement:
+            raise RuntimeError("boom")
+        return object()
+
+
+class RecordingConnectionContext:
+    def __init__(self, connection: RecordingConnection) -> None:
+        self.connection = connection
+
+    def __enter__(self):
+        return self.connection
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+class RecordingEngine:
+    def __init__(self, connection: RecordingConnection) -> None:
+        self.connection = connection
+
+    def connect(self):
+        return RecordingConnectionContext(self.connection)
+
+
+def write_sql(path: Path, sql: str) -> Path:
+    path.write_text(sql, encoding="utf-8")
+    return path
+
+
+def test_run_clean_datasets_runs_requested_sql_files_in_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    population_sql = write_sql(tmp_path / "population.sql", "BEGIN; SELECT 1; COMMIT;")
+    electricity_sql = write_sql(
+        tmp_path / "electricity.sql",
+        "BEGIN; SELECT 2; COMMIT;",
+    )
+    specs = (
+        clean_orchestrator.CleanDatasetSpec("population", population_sql),
+        clean_orchestrator.CleanDatasetSpec("electricity", electricity_sql),
+    )
+    connection = RecordingConnection()
+
+    monkeypatch.setattr(clean_orchestrator, "CLEAN_DATASETS", specs)
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "DEFAULT_CLEAN_DATASETS",
+        tuple(spec.dataset_name for spec in specs),
+    )
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "load_clean_dependencies",
+        lambda connection: {"region_merge_key_rows": 2},
+    )
+
+    results = clean_orchestrator.run_clean_datasets(
+        ("electricity", "population"),
+        engine=RecordingEngine(connection),
+    )
+
+    assert [result.dataset_name for result in results] == [
+        "electricity",
+        "population",
+    ]
+    assert [result.statement_count for result in results] == [3, 3]
+    assert [
+        call[1]
+        for call in connection.calls
+        if call[0] == "exec_driver_sql"
+    ] == [
+        "BEGIN",
+        "SELECT 2",
+        "COMMIT",
+        "BEGIN",
+        "SELECT 1",
+        "COMMIT",
+    ]
+
+
+def test_run_clean_datasets_unlocks_and_rolls_back_failed_sql_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broken_sql = write_sql(tmp_path / "broken.sql", "BEGIN; SELECT broken; COMMIT;")
+    specs = (clean_orchestrator.CleanDatasetSpec("broken", broken_sql),)
+    connection = RecordingConnection(fail_on_statement="SELECT broken")
+
+    monkeypatch.setattr(clean_orchestrator, "CLEAN_DATASETS", specs)
+    monkeypatch.setattr(clean_orchestrator, "DEFAULT_CLEAN_DATASETS", ("broken",))
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "load_clean_dependencies",
+        lambda connection: {"region_merge_key_rows": 2},
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        clean_orchestrator.run_clean_datasets(engine=RecordingEngine(connection))
+
+    assert [
+        call[1]
+        for call in connection.calls
+        if call[0] == "exec_driver_sql"
+    ] == ["BEGIN", "SELECT broken", "ROLLBACK"]
+    assert any(
+        call[0] == "execute" and "pg_advisory_unlock" in call[1]
+        for call in connection.calls
+    )
+
+
+def test_clean_dataset_specs_rejects_unknown_dataset() -> None:
+    with pytest.raises(
+        clean_orchestrator.CleanOrchestratorError,
+        match="unknown clean dataset",
+    ):
+        clean_orchestrator.clean_dataset_specs(("not_a_dataset",))

@@ -36,7 +36,9 @@ logs
 *.sqlite
 *.sqlite3
 
+docs/AI
 docs/old_codes
+migrations
 pgdata
 postgres-data
 .podman

@@ -2,16 +2,14 @@ const state = {
   regions: [],
   status: null,
   selectedVariables: new Set(),
+  selectedFilters: new Map(),
 };
 
 const els = {
   sido: document.getElementById("sido-select"),
   sigungu: document.getElementById("sigungu-select"),
   table: document.getElementById("table-select"),
-  sex: document.getElementById("sex-select"),
-  age: document.getElementById("age-select"),
-  sexField: document.getElementById("sex-field"),
-  ageField: document.getElementById("age-field"),
+  filters: document.getElementById("filter-grid"),
   variables: document.getElementById("variable-list"),
   selectAllVariables: document.getElementById("select-all-variables"),
   refresh: document.getElementById("refresh-button"),
@@ -22,32 +20,6 @@ const els = {
   dataStatusBody: document.getElementById("data-status-body"),
   tableCount: document.getElementById("table-count"),
 };
-
-const ageOptions = [
-  "all",
-  "0-4",
-  "5-9",
-  "10-14",
-  "15-19",
-  "20-24",
-  "25-29",
-  "30-34",
-  "35-39",
-  "40-44",
-  "45-49",
-  "50-54",
-  "55-59",
-  "60-64",
-  "65-69",
-  "70-74",
-  "75-79",
-  "80-",
-];
-
-const ageLabels = new Map([
-  ["all", "전체"],
-  ["80-", "80세 이상"],
-]);
 
 function fetchJson(url) {
   return fetch(url).then((response) => {
@@ -166,17 +138,46 @@ function populateTables() {
 
 function populateFilterOptions() {
   const table = currentTable();
-  const dimensions = new Set(table.dimensions);
-  els.sexField.classList.toggle("is-hidden", !dimensions.has("sex"));
-  els.ageField.classList.toggle("is-hidden", !dimensions.has("age"));
+  const previousFilters = new Map(state.selectedFilters);
+  els.filters.replaceChildren();
+  state.selectedFilters.clear();
 
-  fillSelect(
-    els.age,
-    ageOptions,
-    (age) => age,
-    (age) => ageLabels.get(age) || `${age}세`,
-    "all",
-  );
+  for (const filter of table.filters || []) {
+    if (!filter.values.length) {
+      continue;
+    }
+
+    const label = document.createElement("label");
+    label.className = "field filter-field";
+
+    const text = document.createElement("span");
+    text.textContent = filter.label || filter.name;
+
+    const select = document.createElement("select");
+    const allowedValues = new Set(filter.values.map((item) => item.value));
+    const previousValue = previousFilters.get(filter.name);
+    const preferredValue = allowedValues.has(previousValue)
+      ? previousValue
+      : allowedValues.has("all")
+        ? "all"
+        : filter.values[0].value;
+
+    fillSelect(
+      select,
+      filter.values,
+      (item) => item.value,
+      (item) => item.label || item.value,
+      preferredValue,
+    );
+    state.selectedFilters.set(filter.name, select.value);
+    select.addEventListener("change", () => {
+      state.selectedFilters.set(filter.name, select.value);
+      loadSeries();
+    });
+
+    label.append(text, select);
+    els.filters.append(label);
+  }
 }
 
 function populateVariableOptions() {
@@ -249,10 +250,20 @@ function renderDataStatus() {
       variables.append(tag);
     }
 
+    const filters = document.createElement("div");
+    filters.className = "variable-tags";
+    for (const filter of table.filters || []) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = filter.label || filter.name;
+      filters.append(tag);
+    }
+
     tr.append(
       cell(table.table),
       cell(period),
       cell(formatNumber(table.row_count)),
+      cell(filters),
       cell(variables),
     );
     els.dataStatusBody.append(tr);
@@ -286,12 +297,11 @@ function seriesUrl(variable) {
   });
 
   const table = currentTable();
-  const dimensions = new Set(table.dimensions);
-  if (dimensions.has("sex")) {
-    params.set("sex", els.sex.value);
-  }
-  if (dimensions.has("age")) {
-    params.set("age", els.age.value);
+  for (const filter of table.filters || []) {
+    const value = state.selectedFilters.get(filter.name);
+    if (value) {
+      params.set(filter.name, value);
+    }
   }
   return `/api/series?${params.toString()}`;
 }
@@ -335,8 +345,6 @@ function bindEvents() {
     populateVariableOptions();
     loadSeries();
   });
-  els.sex.addEventListener("change", loadSeries);
-  els.age.addEventListener("change", loadSeries);
   els.refresh.addEventListener("click", loadSeries);
   els.selectAllVariables.addEventListener("click", () => {
     const inputs = els.variables.querySelectorAll("input[type='checkbox']");
@@ -355,7 +363,6 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
-  populateFilterOptionsPlaceholder();
   try {
     const [regionsPayload, statusPayload] = await Promise.all([
       fetchJson("/api/regions"),
@@ -371,16 +378,6 @@ async function init() {
     setStatus(error.message, true);
     els.chart.innerHTML = '<div class="empty-state">초기화 실패</div>';
   }
-}
-
-function populateFilterOptionsPlaceholder() {
-  fillSelect(
-    els.age,
-    ageOptions,
-    (age) => age,
-    (age) => ageLabels.get(age) || `${age}세`,
-    "all",
-  );
 }
 
 document.addEventListener("DOMContentLoaded", init);

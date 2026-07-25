@@ -13,7 +13,7 @@
     <header class="topbar">
       <div>
         <p class="eyebrow">Rural Basic Income</p>
-        <h1>지역 인구 시계열</h1>
+        <h1>지역 지표 시계열</h1>
       </div>
       <div class="version">v{{ app_version }}</div>
     </header>
@@ -33,18 +33,7 @@
             <span>테이블</span>
             <select id="table-select"></select>
           </label>
-          <label class="field filter-field is-hidden" id="sex-field">
-            <span>성별</span>
-            <select id="sex-select">
-              <option value="all">전체</option>
-              <option value="male">남자</option>
-              <option value="female">여자</option>
-            </select>
-          </label>
-          <label class="field filter-field is-hidden" id="age-field">
-            <span>연령</span>
-            <select id="age-select"></select>
-          </label>
+          <div class="filter-grid" id="filter-grid"></div>
         </div>
 
         <div class="variable-panel">
@@ -82,6 +71,7 @@
                 <th>테이블</th>
                 <th>기간</th>
                 <th>행</th>
+                <th>필터</th>
                 <th>변수</th>
               </tr>
             </thead>
