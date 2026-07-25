@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from rural_basic_income.worker.download import PeriodDownload
+from rural_basic_income.worker.download import PeriodDownload, SourcePeriodUnavailable
 from rural_basic_income.worker.sources import _kosis, household, mover, population
 
 
@@ -380,3 +380,85 @@ def test_mover_download_accepts_preloaded_region_codes(
     assert len(result.payload_chunks) == 1
     assert [call["tblId"] for call in calls] == ["DT_1B26001"]
     assert calls[0]["objL1"] == "11110+11140"
+
+
+def test_kosis_error_30_is_source_period_unavailable() -> None:
+    assert (
+        _kosis.kosis_unavailable_message(
+            {"err": "30", "errMsg": "데이터가 존재하지 않습니다."}
+        )
+        == "KOSIS data unavailable: 30 데이터가 존재하지 않습니다."
+    )
+
+
+def test_kosis_error_payload_is_source_period_unavailable() -> None:
+    assert (
+        _kosis.kosis_unavailable_message(
+            {"err": "99", "errMsg": "API limit exceeded"}
+        )
+        == "KOSIS data unavailable: 99 API limit exceeded"
+    )
+
+
+def test_kosis_dict_response_with_no_data_raises_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return '{"err":"30","errMsg":"데이터가 존재하지 않습니다."}'.encode(
+                "utf-8"
+            )
+
+    monkeypatch.setattr(
+        _kosis,
+        "urlopen",
+        lambda request, timeout=30: FakeResponse(),
+    )
+    monkeypatch.setattr(
+        _kosis,
+        "build_statistics_parameter_url",
+        lambda params, api_key=None: "https://example.test/kosis",
+    )
+
+    with pytest.raises(SourcePeriodUnavailable):
+        _kosis.fetch_statistics_parameter_data(
+            {"tblId": "DT_1B26001", "startPrdDe": "202606"},
+            max_retries=0,
+        )
+
+
+def test_kosis_unexpected_dict_response_raises_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"unexpected":"shape"}'
+
+    monkeypatch.setattr(
+        _kosis,
+        "urlopen",
+        lambda request, timeout=30: FakeResponse(),
+    )
+    monkeypatch.setattr(
+        _kosis,
+        "build_statistics_parameter_url",
+        lambda params, api_key=None: "https://example.test/kosis",
+    )
+
+    with pytest.raises(SourcePeriodUnavailable):
+        _kosis.fetch_statistics_parameter_data(
+            {"tblId": "DT_1B26001", "startPrdDe": "202606"},
+            max_retries=0,
+        )

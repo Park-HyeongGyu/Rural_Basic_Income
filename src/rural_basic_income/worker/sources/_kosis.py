@@ -13,7 +13,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from rural_basic_income.config import Settings, get_settings
-from rural_basic_income.worker.download import PayloadChunk, SourcePeriodDownload
+from rural_basic_income.worker.download import (
+    PayloadChunk,
+    SourcePeriodDownload,
+    SourcePeriodUnavailable,
+)
 
 KOSIS_STATISTICS_PARAMETER_URL = (
     "https://kosis.kr/openapi/Param/statisticsParameterData.do"
@@ -78,6 +82,15 @@ class KosisApiError(RuntimeError):
 
 class KosisDownloadError(RuntimeError):
     """Raised when KOSIS data cannot be downloaded into an in-memory batch."""
+
+
+def kosis_unavailable_message(payload: Mapping[str, Any]) -> str | None:
+    error_code = str(payload.get("err") or payload.get("errorCode") or "")
+    error_message = str(payload.get("errMsg") or payload.get("errorMessage") or "")
+    if error_code or error_message:
+        details = " ".join(part for part in (error_code, error_message) if part)
+        return f"KOSIS data unavailable: {details}".strip()
+    return None
 
 
 def make_chunks(values: list[str] | tuple[str, ...], chunk_size: int) -> list[list[str]]:
@@ -206,7 +219,7 @@ def fetch_statistics_parameter_data(
             message = f"KOSIS request failed with HTTP {exc.code}"
             if response_text:
                 message = f"{message}: {response_text[:300]}"
-            raise KosisApiError(message) from exc
+            raise SourcePeriodUnavailable(message) from exc
         except (TimeoutError, URLError) as exc:
             if attempt_index < max_retries:
                 sleep_before_retry(
@@ -227,7 +240,9 @@ def fetch_statistics_parameter_data(
                     max_sleep_seconds=max_retry_sleep_seconds,
                 )
                 continue
-            raise KosisApiError("KOSIS response was not valid JSON") from exc
+            raise SourcePeriodUnavailable(
+                f"KOSIS response was not valid JSON: {response_text[:300]}"
+            ) from exc
 
         if isinstance(payload, list):
             return payload
@@ -241,9 +256,18 @@ def fetch_statistics_parameter_data(
             )
             continue
 
-        raise KosisApiError("KOSIS response JSON was not a list")
+        if isinstance(payload, dict):
+            unavailable_message = (
+                kosis_unavailable_message(payload)
+                or f"KOSIS response JSON was not a list: {payload_text[:300]}"
+            )
+        else:
+            unavailable_message = (
+                f"KOSIS response JSON was not a list: {payload_text[:300]}"
+            )
+        raise SourcePeriodUnavailable(unavailable_message)
 
-    raise KosisApiError("KOSIS request failed after retry attempts")
+    raise SourcePeriodUnavailable("KOSIS request failed after retry attempts")
 
 
 def get_dimension_specs(rows: list[Mapping[str, Any]]) -> list[tuple[str, str, str]]:

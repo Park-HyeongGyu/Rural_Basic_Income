@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import time
 from collections.abc import Mapping
@@ -14,6 +15,7 @@ from rural_basic_income.config import Settings, get_settings
 from rural_basic_income.worker.download import (
     PayloadChunk,
     SourcePeriodDownload,
+    SourcePeriodUnavailable,
 )
 from rural_basic_income.worker.periods import validate_period
 
@@ -52,6 +54,7 @@ RAW_COLUMNS = (
     "cntrPwr",
     "downloaded_at",
 )
+LOGGER = logging.getLogger(__name__)
 
 
 class KepcoApiKeyMissing(RuntimeError):
@@ -139,6 +142,19 @@ def documents_contain_rows(documents: tuple[Mapping[str, Any], ...]) -> bool:
     return False
 
 
+def kepco_unavailable_message(
+    documents: tuple[Mapping[str, Any], ...],
+) -> str | None:
+    for document in documents:
+        code = str(document.get("errCd") or document.get("code") or "")
+        message = str(document.get("errMsg") or document.get("message") or "")
+        lowered_message = message.lower()
+        if code or message:
+            details = " ".join(part for part in (code, message) if part)
+            return f"KEPCO data unavailable: {details}".strip()
+    return None
+
+
 def fetch_kepco_documents(
     base_url: str,
     params: Mapping[str, str],
@@ -169,6 +185,10 @@ def fetch_kepco_documents(
                 documents = ()
             if documents and documents_contain_rows(documents):
                 return documents
+            if documents:
+                unavailable_message = kepco_unavailable_message(documents)
+                if unavailable_message:
+                    raise SourcePeriodUnavailable(unavailable_message) from exc
 
             should_retry = (
                 exc.code in RETRYABLE_HTTP_STATUS_CODES
@@ -186,7 +206,7 @@ def fetch_kepco_documents(
             message = f"KEPCO request failed with HTTP {exc.code}"
             if response_text:
                 message = f"{message}: {response_text[:300]}"
-            raise KepcoApiError(message) from exc
+            raise SourcePeriodUnavailable(message) from exc
         except (TimeoutError, URLError) as exc:
             if attempt_index < max_retries:
                 time.sleep(
@@ -211,7 +231,9 @@ def fetch_kepco_documents(
                     )
                 )
                 continue
-            raise KepcoApiError("KEPCO response was not valid JSON") from exc
+            raise SourcePeriodUnavailable(
+                f"KEPCO response was not valid JSON: {response_text[:300]}"
+            ) from exc
 
         response_summary = json.dumps(documents, ensure_ascii=False)
         if is_retryable_message(response_summary) and attempt_index < max_retries:
@@ -224,9 +246,13 @@ def fetch_kepco_documents(
             )
             continue
 
+        unavailable_message = kepco_unavailable_message(documents)
+        if unavailable_message and not documents_contain_rows(documents):
+            raise SourcePeriodUnavailable(unavailable_message)
+
         return documents
 
-    raise KepcoApiError("KEPCO request failed after retry attempts")
+    raise SourcePeriodUnavailable("KEPCO request failed after retry attempts")
 
 
 def extract_data_rows(
@@ -236,7 +262,7 @@ def extract_data_rows(
     for document in documents:
         data_rows = document.get("data") or []
         if not isinstance(data_rows, list):
-            raise KepcoApiError("KEPCO data field was not a list")
+            raise SourcePeriodUnavailable("KEPCO data field was not a list")
         rows.extend(dict(row) for row in data_rows)
     return rows
 
@@ -305,6 +331,11 @@ def download_electricity(
     max_retries: int = 5,
 ) -> SourcePeriodDownload:
     validated_period = validate_period(period)
+    LOGGER.info(
+        "electricity fetch start period=%s contract_code=%s",
+        validated_period,
+        contract_code or "ALL",
+    )
     request_params, documents = fetch_electricity_payload(
         validated_period,
         contract_code=contract_code,
@@ -312,6 +343,12 @@ def download_electricity(
         max_retries=max_retries,
     )
     data_rows = extract_data_rows(documents)
+    LOGGER.info(
+        "electricity fetch complete period=%s documents=%d rows=%d",
+        validated_period,
+        len(documents),
+        len(data_rows),
+    )
     raw_rows = rows_to_raw_rows(data_rows)
     payload_chunk = PayloadChunk(
         request_params=request_params,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +14,8 @@ from rural_basic_income.db.connection import get_engine
 from rural_basic_income.worker.download import PeriodDownload, SourcePeriodDownload
 
 DOWNLOAD_STATUS_OK = 1
+DOWNLOAD_STATUS_UNAVAILABLE = 2
+LOGGER = logging.getLogger(__name__)
 
 RawWriteStatus = Literal["written", "skipped"]
 
@@ -180,14 +183,26 @@ def successful_row_count(
     return int(row_count or 0)
 
 
+def acquire_source_period_name_lock(
+    connection: Connection,
+    source_name: str,
+    period: str,
+) -> None:
+    lock_key = f"{source_name}:{period}"
+    connection.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": lock_key},
+    )
+
+
 def acquire_source_period_lock(
     connection: Connection,
     download: SourcePeriodDownload,
 ) -> None:
-    lock_key = f"{download.source_name}:{download.period}"
-    connection.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
-        {"lock_key": lock_key},
+    acquire_source_period_name_lock(
+        connection,
+        download.source_name,
+        download.period,
     )
 
 
@@ -406,6 +421,61 @@ def mark_source_period_success(
     )
 
 
+def mark_source_period_unavailable(
+    *,
+    source_name: str,
+    source_name_kor: str,
+    source_table_id: str,
+    period: str,
+    error_message: str,
+    engine: Engine | None = None,
+) -> None:
+    db_engine = engine or get_engine()
+    with db_engine.begin() as connection:
+        create_writer_tables(connection)
+        acquire_source_period_name_lock(connection, source_name, period)
+        connection.execute(
+            text(
+                """
+                INSERT INTO metadata.download_status (
+                    source_name,
+                    source_name_kor,
+                    source_table_id,
+                    period,
+                    status,
+                    row_count,
+                    error_message
+                )
+                VALUES (
+                    :source_name,
+                    :source_name_kor,
+                    :source_table_id,
+                    :period,
+                    :status,
+                    0,
+                    :error_message
+                )
+                ON CONFLICT (source_name, period)
+                DO UPDATE SET
+                    source_name_kor = EXCLUDED.source_name_kor,
+                    source_table_id = EXCLUDED.source_table_id,
+                    status = EXCLUDED.status,
+                    row_count = EXCLUDED.row_count,
+                    downloaded_at = CURRENT_TIMESTAMP,
+                    error_message = EXCLUDED.error_message
+                """
+            ),
+            {
+                "source_name": source_name,
+                "source_name_kor": source_name_kor,
+                "source_table_id": source_table_id,
+                "period": period,
+                "status": DOWNLOAD_STATUS_UNAVAILABLE,
+                "error_message": error_message,
+            },
+        )
+
+
 def write_source_period_download(
     download: SourcePeriodDownload,
     *,
@@ -413,27 +483,86 @@ def write_source_period_download(
     force: bool = False,
 ) -> RawWriteResult:
     db_engine = engine or get_engine()
-    with db_engine.begin() as connection:
-        create_writer_tables(connection)
-        acquire_source_period_lock(connection, download)
-
-        existing_row_count = successful_row_count(connection, download)
-        if existing_row_count is not None and not force:
-            return RawWriteResult(
-                source_name=download.source_name,
-                period=download.period,
-                status="skipped",
-                row_count=existing_row_count,
+    LOGGER.info(
+        "raw write start source=%s period=%s raw_table=%s force=%s "
+        "payload_chunks=%d payload_rows=%d raw_rows=%d",
+        download.source_name,
+        download.period,
+        download.raw_table,
+        force,
+        len(download.payload_chunks),
+        download.payload_row_count,
+        download.raw_row_count,
+    )
+    try:
+        with db_engine.begin() as connection:
+            create_writer_tables(connection)
+            acquire_source_period_lock(connection, download)
+            LOGGER.info(
+                "raw write lock acquired source=%s period=%s",
+                download.source_name,
+                download.period,
             )
 
-        ensure_raw_table(connection, download.raw_table, download.raw_columns)
-        if force:
-            delete_existing_source_period(connection, download)
+            existing_row_count = successful_row_count(connection, download)
+            if existing_row_count is not None and not force:
+                LOGGER.info(
+                    "raw write skipped existing source=%s period=%s rows=%d",
+                    download.source_name,
+                    download.period,
+                    existing_row_count,
+                )
+                return RawWriteResult(
+                    source_name=download.source_name,
+                    period=download.period,
+                    status="skipped",
+                    row_count=existing_row_count,
+                )
 
-        insert_payload_chunks(connection, download)
-        insert_raw_rows(connection, download)
-        mark_source_period_success(connection, download)
+            ensure_raw_table(connection, download.raw_table, download.raw_columns)
+            LOGGER.info(
+                "raw table ready table=raw.%s columns=%d",
+                download.raw_table,
+                len(download.raw_columns),
+            )
+            if force:
+                LOGGER.info(
+                    "raw write deleting existing source-period source=%s period=%s",
+                    download.source_name,
+                    download.period,
+                )
+                delete_existing_source_period(connection, download)
 
+            insert_payload_chunks(connection, download)
+            LOGGER.info(
+                "raw_json payload chunks inserted source=%s period=%s chunks=%d",
+                download.source_name,
+                download.period,
+                len(download.payload_chunks),
+            )
+            insert_raw_rows(connection, download)
+            LOGGER.info(
+                "raw rows inserted source=%s period=%s rows=%d",
+                download.source_name,
+                download.period,
+                download.raw_row_count,
+            )
+            mark_source_period_success(connection, download)
+
+    except Exception:
+        LOGGER.exception(
+            "raw write failed source=%s period=%s transaction=rollback",
+            download.source_name,
+            download.period,
+        )
+        raise
+
+    LOGGER.info(
+        "raw write committed source=%s period=%s rows=%d",
+        download.source_name,
+        download.period,
+        download.raw_row_count,
+    )
     return RawWriteResult(
         source_name=download.source_name,
         period=download.period,

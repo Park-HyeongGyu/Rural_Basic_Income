@@ -6,7 +6,11 @@ from typing import Any
 import pytest
 
 from rural_basic_income.worker import raw_orchestrator, raw_writer
-from rural_basic_income.worker.download import PayloadChunk, SourcePeriodDownload
+from rural_basic_income.worker.download import (
+    PayloadChunk,
+    SourcePeriodDownload,
+    SourcePeriodUnavailable,
+)
 
 
 def make_download(
@@ -32,7 +36,8 @@ def make_download(
         ),
         raw_columns=("시점", "값", "downloaded_at"),
         raw_rows=raw_rows
-        or (
+        if raw_rows is not None
+        else (
             {
                 "시점": period,
                 "값": "1",
@@ -295,6 +300,144 @@ def test_refresh_raw_range_runs_periods_in_order(
         "202605",
         "202606",
     ]
+
+
+def test_refresh_raw_range_records_unavailable_periods_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "source_period_success_row_count",
+        lambda source_name, period, *, engine=None: None,
+    )
+
+    metadata_calls: list[dict[str, Any]] = []
+
+    def fake_mark_source_period_unavailable(**kwargs):
+        metadata_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        raw_writer,
+        "mark_source_period_unavailable",
+        fake_mark_source_period_unavailable,
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    def unavailable_mover(period: str):
+        calls.append(("mover", period))
+        raise SourcePeriodUnavailable("KOSIS data unavailable: 30 데이터가 존재하지 않습니다.")
+
+    def download_electricity(period: str):
+        calls.append(("electricity", period))
+        return make_download("electricity", period)
+
+    def fake_writer(download, *, engine=None, force=False):
+        return raw_writer.RawWriteResult(
+            source_name=download.source_name,
+            period=download.period,
+            status="written",
+            row_count=download.raw_row_count,
+        )
+
+    results = raw_orchestrator.refresh_raw_range(
+        "202605",
+        "202606",
+        sources=("mover", "electricity"),
+        engine=object(),
+        downloaders={
+            "mover": unavailable_mover,
+            "electricity": download_electricity,
+        },
+        writer=fake_writer,
+    )
+
+    assert calls == [
+        ("mover", "202605"),
+        ("electricity", "202605"),
+        ("mover", "202606"),
+        ("electricity", "202606"),
+    ]
+    assert [result.status for result in results] == [
+        "skipped_unavailable",
+        "downloaded_written",
+        "skipped_unavailable",
+        "downloaded_written",
+    ]
+    assert results[0].unavailable
+    assert results[2].unavailable
+    assert metadata_calls[0]["source_name"] == "mover"
+    assert metadata_calls[0]["period"] == "202605"
+    assert "데이터가 존재하지 않습니다" in metadata_calls[0]["error_message"]
+    assert metadata_calls[1]["period"] == "202606"
+
+
+def test_refresh_raw_range_can_fail_on_unavailable_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "source_period_success_row_count",
+        lambda source_name, period, *, engine=None: None,
+    )
+
+    def unavailable_mover(period: str):
+        raise SourcePeriodUnavailable("KOSIS data unavailable: 30 데이터가 존재하지 않습니다.")
+
+    with pytest.raises(SourcePeriodUnavailable):
+        raw_orchestrator.refresh_raw_range(
+            "202605",
+            "202606",
+            sources=("mover",),
+            engine=object(),
+            downloaders={"mover": unavailable_mover},
+            continue_on_unavailable=False,
+        )
+
+
+def test_refresh_source_period_records_zero_row_download_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "source_period_success_row_count",
+        lambda source_name, period, *, engine=None: None,
+    )
+
+    metadata_calls: list[dict[str, Any]] = []
+
+    def fake_mark_source_period_unavailable(**kwargs):
+        metadata_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        raw_writer,
+        "mark_source_period_unavailable",
+        fake_mark_source_period_unavailable,
+    )
+
+    def empty_download(period: str):
+        return make_download(
+            "local_currency",
+            period,
+            raw_rows=(),
+        )
+
+    def fail_writer(download, *, engine=None, force=False):
+        raise AssertionError("zero-row unavailable downloads should not be written")
+
+    result = raw_orchestrator.refresh_source_period(
+        "local_currency",
+        "202706",
+        engine=object(),
+        downloaders={"local_currency": empty_download},
+        writer=fail_writer,
+    )
+
+    assert result.status == "skipped_unavailable"
+    assert result.row_count == 0
+    assert metadata_calls[0]["source_name"] == "local_currency"
+    assert metadata_calls[0]["period"] == "202706"
+    assert "returned no rows" in metadata_calls[0]["error_message"]
 
 
 def test_unknown_source_raises_clear_error() -> None:

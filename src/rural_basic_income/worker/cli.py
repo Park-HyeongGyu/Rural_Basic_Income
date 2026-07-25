@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from rural_basic_income.worker import clean_orchestrator, raw_orchestrator
 
 RawRangeRunner = Callable[..., tuple[raw_orchestrator.RawRefreshResult, ...]]
 CleanRunner = Callable[..., tuple[clean_orchestrator.CleanDatasetResult, ...]]
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,18 @@ def split_option_values(values: Sequence[str] | None) -> tuple[str, ...] | None:
 
 def format_available(values: Sequence[str]) -> str:
     return ", ".join(values)
+
+
+def configure_logging(level_name: str = "INFO") -> None:
+    log_level = getattr(logging, level_name.upper(), None)
+    if not isinstance(log_level, int):
+        raise ValueError(f"unknown log level: {level_name}")
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stdout,
+    )
 
 
 def print_raw_results(
@@ -83,6 +97,17 @@ def run_update(
 ) -> WorkerUpdateResult:
     db_engine = engine or get_engine()
 
+    LOGGER.info(
+        "worker update start start_period=%s end_period=%s sources=%s "
+        "datasets=%s force=%s",
+        start_period,
+        end_period,
+        tuple(sources) if sources is not None else raw_orchestrator.DEFAULT_RAW_SOURCES,
+        tuple(datasets)
+        if datasets is not None
+        else clean_orchestrator.DEFAULT_CLEAN_DATASETS,
+        force,
+    )
     raw_results = raw_runner(
         start_period,
         end_period,
@@ -97,6 +122,11 @@ def run_update(
         engine=db_engine,
     )
     print_clean_results(clean_results, output=output)
+    LOGGER.info(
+        "worker update complete raw_results=%d clean_results=%d",
+        len(raw_results),
+        len(clean_results),
+    )
 
     return WorkerUpdateResult(
         raw_results=tuple(raw_results),
@@ -161,6 +191,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="redownload and replace raw source-period data even if already successful",
     )
+    update_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="worker log level for stdout/stderr logs. Default: INFO",
+    )
     update_parser.set_defaults(func=run_update_command)
 
     return parser
@@ -170,6 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        configure_logging(args.log_level)
         return args.func(args)
     except (
         ValueError,

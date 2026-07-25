@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+from rural_basic_income.worker.download import SourcePeriodUnavailable
 from rural_basic_income.worker.sources import local_currency
 
 
@@ -127,10 +130,20 @@ def test_download_local_currency_can_filter_usage_region_code(monkeypatch) -> No
     ]
 
 
-def test_validate_payload_rejects_error_payload() -> None:
-    try:
+def test_validate_payload_marks_error_payload_unavailable() -> None:
+    with pytest.raises(SourcePeriodUnavailable):
         local_currency.validate_payload({"errorCode": "99", "message": "bad request"})
-    except local_currency.DataGoKrApiError as exc:
-        assert "99" in str(exc)
-    else:
-        raise AssertionError("expected DataGoKrApiError")
+
+
+def test_validate_payload_marks_no_data_unavailable() -> None:
+    with pytest.raises(SourcePeriodUnavailable):
+        local_currency.validate_payload(
+            {
+                "response": {
+                    "header": {
+                        "resultCode": "30",
+                        "resultMsg": "데이터가 존재하지 않습니다.",
+                    }
+                }
+            }
+        )

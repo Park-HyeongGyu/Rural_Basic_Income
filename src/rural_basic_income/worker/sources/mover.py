@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -18,6 +19,7 @@ from rural_basic_income.worker.sources._kosis import (
 
 # Source: KOSIS 시군구/성/연령(5세)별 이동자수.
 SPEC = MOVER_SPEC
+LOGGER = logging.getLogger(__name__)
 
 
 def extract_region_codes(rows: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
@@ -77,23 +79,48 @@ def fetch_mover_payloads(
             max_retries=max_retries,
         )
 
+    region_chunks = make_chunks(list(resolved_region_codes), chunk_size)
+    LOGGER.info(
+        "KOSIS mover chunks prepared period=%s region_codes=%d chunk_size=%d "
+        "chunks=%d",
+        validated_period,
+        len(resolved_region_codes),
+        chunk_size,
+        len(region_chunks),
+    )
+
     chunks: KosisPayloadChunks = []
-    for chunk in make_chunks(list(resolved_region_codes), chunk_size):
+    for chunk_index, chunk in enumerate(region_chunks, start=1):
         params = {
             **base_params(SPEC, validated_period),
             "objL1": "+".join(chunk),
             "objL2": "ALL",
             "objL3": "ALL",
         }
+        LOGGER.info(
+            "KOSIS mover chunk fetch start period=%s chunk=%d/%d region_codes=%d",
+            validated_period,
+            chunk_index,
+            len(region_chunks),
+            len(chunk),
+        )
+        rows = fetch_rows(
+            params,
+            request_sleep_seconds=request_sleep_seconds,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        LOGGER.info(
+            "KOSIS mover chunk fetch complete period=%s chunk=%d/%d rows=%d",
+            validated_period,
+            chunk_index,
+            len(region_chunks),
+            len(rows),
+        )
         chunks.append(
             (
                 params,
-                fetch_rows(
-                    params,
-                    request_sleep_seconds=request_sleep_seconds,
-                    timeout=timeout,
-                    max_retries=max_retries,
-                ),
+                rows,
             )
         )
     return chunks

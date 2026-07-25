@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from typing import Any
 
 
+class SourcePeriodUnavailable(RuntimeError):
+    """Raised when a source explicitly reports that a period has no data yet."""
+
+
 @dataclass(frozen=True)
 class PayloadChunk:
     request_params: Mapping[str, str]

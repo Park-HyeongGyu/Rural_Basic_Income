@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import random
 import time
@@ -12,7 +13,11 @@ from urllib.parse import urlencode, unquote
 from urllib.request import Request, urlopen
 
 from rural_basic_income.config import Settings, get_settings
-from rural_basic_income.worker.download import PayloadChunk, SourcePeriodDownload
+from rural_basic_income.worker.download import (
+    PayloadChunk,
+    SourcePeriodDownload,
+    SourcePeriodUnavailable,
+)
 from rural_basic_income.worker.periods import validate_period
 
 # Source: data.go.kr 한국조폐공사 지역사랑상품권 결제정보.
@@ -51,6 +56,7 @@ RAW_COLUMNS = (
     "stlm_nocs",
     "downloaded_at",
 )
+LOGGER = logging.getLogger(__name__)
 
 
 class DataGoKrApiKeyMissing(RuntimeError):
@@ -59,6 +65,37 @@ class DataGoKrApiKeyMissing(RuntimeError):
 
 class DataGoKrApiError(RuntimeError):
     """Raised when data.go.kr returns an unusable response."""
+
+
+def data_go_kr_unavailable_message(payload: Mapping[str, Any]) -> str | None:
+    response_header = payload.get("response", {}).get("header", {})
+    code = (
+        response_header.get("resultCode")
+        or payload.get("resultCode")
+        or payload.get("code")
+        or payload.get("errorCode")
+    )
+    message = (
+        response_header.get("resultMsg")
+        or payload.get("resultMsg")
+        or payload.get("message")
+        or payload.get("errorMessage")
+        or payload.get("msg")
+        or ""
+    )
+    code_text = "" if code is None else str(code)
+    message_text = str(message)
+    lowered_message = message_text.lower()
+    if (
+        code_text
+        or "no data" in lowered_message
+        or "not found" in lowered_message
+        or "데이터가 존재하지" in message_text
+        or "자료가 없습니다" in message_text
+    ):
+        details = " ".join(part for part in (code_text, message_text) if part)
+        return f"data.go.kr data unavailable: {details}".strip()
+    return None
 
 
 def build_data_go_kr_url(
@@ -104,11 +141,17 @@ def read_http_error_body(exc: HTTPError) -> str:
 
 
 def validate_payload(payload: Mapping[str, Any]) -> None:
+    unavailable_message = data_go_kr_unavailable_message(payload)
+    if unavailable_message:
+        raise SourcePeriodUnavailable(unavailable_message)
+
     response_header = payload.get("response", {}).get("header", {})
     result_code = response_header.get("resultCode")
     if result_code is not None and str(result_code) not in {"0", "00"}:
         result_msg = response_header.get("resultMsg")
-        raise DataGoKrApiError(f"API rejected request: {result_code} {result_msg}")
+        raise SourcePeriodUnavailable(
+            f"data.go.kr rejected request: {result_code} {result_msg}"
+        )
 
     for code_key in ("resultCode", "code", "errorCode"):
         code_value = payload.get(code_key)
@@ -120,11 +163,13 @@ def validate_payload(payload: Mapping[str, Any]) -> None:
             or payload.get("errorMessage")
             or payload.get("msg")
         )
-        raise DataGoKrApiError(f"API rejected request: {code_value} {message}")
+        raise SourcePeriodUnavailable(
+            f"data.go.kr rejected request: {code_value} {message}"
+        )
 
     success_keys = {"currentCount", "data", "matchCount", "page", "perPage", "totalCount"}
     if not success_keys.intersection(payload):
-        raise DataGoKrApiError(f"Unexpected API payload: {payload}")
+        raise SourcePeriodUnavailable(f"Unexpected data.go.kr payload: {payload}")
 
 
 def normalize_data_rows(data: Any) -> list[dict[str, Any]]:
@@ -134,7 +179,7 @@ def normalize_data_rows(data: Any) -> list[dict[str, Any]]:
         return [dict(row) for row in data]
     if isinstance(data, dict):
         return [dict(data)]
-    raise DataGoKrApiError(f"Unexpected data field type: {type(data)}")
+    raise SourcePeriodUnavailable(f"Unexpected data field type: {type(data)}")
 
 
 def fetch_json_payload(
@@ -177,7 +222,7 @@ def fetch_json_payload(
             message = f"data.go.kr request failed with HTTP {exc.code}"
             if response_text:
                 message = f"{message}: {response_text[:300]}"
-            raise DataGoKrApiError(message) from exc
+            raise SourcePeriodUnavailable(message) from exc
         except (TimeoutError, URLError) as exc:
             if attempt_index < max_retries:
                 time.sleep(
@@ -202,15 +247,19 @@ def fetch_json_payload(
                     )
                 )
                 continue
-            raise DataGoKrApiError("data.go.kr response was not valid JSON") from exc
+            raise SourcePeriodUnavailable(
+                f"data.go.kr response was not valid JSON: {response_text[:300]}"
+            ) from exc
 
         if not isinstance(payload, dict):
-            raise DataGoKrApiError("data.go.kr response JSON was not an object")
+            raise SourcePeriodUnavailable(
+                f"data.go.kr response JSON was not an object: {response_text[:300]}"
+            )
 
         validate_payload(payload)
         return payload
 
-    raise DataGoKrApiError("data.go.kr request failed after retry attempts")
+    raise SourcePeriodUnavailable("data.go.kr request failed after retry attempts")
 
 
 def make_page_params(
@@ -280,6 +329,12 @@ def iter_local_currency_payloads(
     total_pages: int | None = None
 
     while True:
+        LOGGER.info(
+            "local currency page fetch start period=%s page=%d per_page=%d",
+            validated_period,
+            page,
+            per_page,
+        )
         params, payload = fetch_local_currency_page(
             validated_period,
             page=page,
@@ -295,6 +350,19 @@ def iter_local_currency_payloads(
         if total_pages is None:
             match_count = get_match_count(payload)
             total_pages = math.ceil(match_count / per_page) if match_count else 1
+            LOGGER.info(
+                "local currency page plan period=%s match_count=%d total_pages=%d",
+                validated_period,
+                match_count,
+                total_pages,
+            )
+        LOGGER.info(
+            "local currency page fetch complete period=%s page=%d/%d rows=%d",
+            validated_period,
+            page,
+            total_pages,
+            current_count,
+        )
 
         if page >= total_pages or current_count < per_page:
             return tuple(chunks)

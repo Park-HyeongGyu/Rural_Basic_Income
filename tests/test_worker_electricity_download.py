@@ -3,6 +3,9 @@ from __future__ import annotations
 from io import BytesIO
 from urllib.error import HTTPError
 
+import pytest
+
+from rural_basic_income.worker.download import SourcePeriodUnavailable
 from rural_basic_income.worker.sources import electricity
 
 
@@ -49,6 +52,32 @@ def test_fetch_kepco_documents_accepts_404_with_usable_data(monkeypatch) -> None
     assert len(documents) == 2
     assert documents[0]["errCd"] == "404"
     assert documents[1]["data"][0]["metro"] == "강원특별자치도"
+
+
+def test_fetch_kepco_documents_marks_404_without_rows_unavailable(monkeypatch) -> None:
+    response_body = '{"errCd":"404","errMsg":"NotFound"}'.encode()
+
+    def fake_urlopen(request, timeout):
+        raise HTTPError(
+            url=request.full_url,
+            code=404,
+            msg="Not Found",
+            hdrs={},
+            fp=BytesIO(response_body),
+        )
+
+    monkeypatch.setattr(electricity, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        electricity,
+        "build_kepco_url",
+        lambda base_url, params: "https://example.test/kepco",
+    )
+
+    with pytest.raises(SourcePeriodUnavailable):
+        electricity.fetch_kepco_documents(
+            electricity.POWER_USAGE_CONTRACT_TYPE_URL,
+            {"year": "2027", "month": "06"},
+        )
 
 
 def test_fetch_kepco_documents_retries_empty_401(monkeypatch) -> None:
