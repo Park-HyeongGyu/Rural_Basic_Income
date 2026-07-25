@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rural-basic-income"
-version = "0.2.0"
+version = "0.3.0"
 description = "Research web platform for rural basic income data."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,6 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
+rbi = "rural_basic_income.cli:main"
 rbi-worker = "rural_basic_income.worker.cli:main"
 
 [project.optional-dependencies]

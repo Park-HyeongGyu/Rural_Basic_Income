@@ -9,6 +9,46 @@ import pytest
 from rural_basic_income.worker import cli, clean_orchestrator, raw_orchestrator
 
 
+class ScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one(self):
+        return self.value
+
+
+class LockingConnection:
+    def __init__(self, *, lock_result: bool) -> None:
+        self.lock_result = lock_result
+        self.calls: list[tuple[str, object]] = []
+
+    def execute(self, statement, parameters=None):
+        sql = str(statement)
+        self.calls.append((sql, parameters))
+        if "pg_try_advisory_lock" in sql:
+            return ScalarResult(self.lock_result)
+        return ScalarResult(True)
+
+
+class LockingConnectionContext:
+    def __init__(self, connection: LockingConnection) -> None:
+        self.connection = connection
+
+    def __enter__(self):
+        return self.connection
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+class LockingEngine:
+    def __init__(self, connection: LockingConnection) -> None:
+        self.connection = connection
+
+    def connect(self):
+        return LockingConnectionContext(self.connection)
+
+
 def test_split_option_values_accepts_commas_and_repeated_values() -> None:
     assert cli.split_option_values(
         ("population,mover", " electricity ", "local_currency,"),
@@ -72,6 +112,7 @@ def test_run_update_runs_raw_then_clean_with_selected_options() -> None:
         raw_runner=raw_runner,
         clean_runner=clean_runner,
         output=output,
+        lock_update=False,
     )
 
     assert calls == [
@@ -82,6 +123,50 @@ def test_run_update_runs_raw_then_clean_with_selected_options() -> None:
     assert result.clean_results[0].statement_count == 16
     assert "202601 population: downloaded_written rows=10" in output.getvalue()
     assert "population: clean_population.sql statements=16" in output.getvalue()
+
+
+def test_run_update_uses_update_overlap_lock() -> None:
+    calls: list[str] = []
+    connection = LockingConnection(lock_result=True)
+    engine = LockingEngine(connection)
+
+    def raw_runner(*args, **kwargs):
+        calls.append("raw")
+        return ()
+
+    def clean_runner(*args, **kwargs):
+        calls.append("clean")
+        return ()
+
+    cli.run_update(
+        start_period="202601",
+        end_period="202601",
+        engine=engine,
+        raw_runner=raw_runner,
+        clean_runner=clean_runner,
+        output=io.StringIO(),
+    )
+
+    assert calls == ["raw", "clean"]
+    assert any("pg_try_advisory_lock" in call[0] for call in connection.calls)
+    assert any("pg_advisory_unlock" in call[0] for call in connection.calls)
+
+
+def test_run_update_rejects_overlapping_update() -> None:
+    connection = LockingConnection(lock_result=False)
+    engine = LockingEngine(connection)
+
+    def fail_raw_runner(*args, **kwargs):
+        raise AssertionError("raw runner should not start without update lock")
+
+    with pytest.raises(cli.WorkerCliError, match="already running"):
+        cli.run_update(
+            start_period="202601",
+            end_period="202601",
+            engine=engine,
+            raw_runner=fail_raw_runner,
+            output=io.StringIO(),
+        )
 
 
 def test_update_command_parses_sources_and_datasets(
@@ -180,3 +265,97 @@ def test_update_command_accepts_legacy_force_as_raw_force(
 
     assert exit_code == 0
     assert calls[0]["force_raw"] is True
+
+
+def test_update_latest_command_calls_latest_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fake_run_update_latest(**kwargs):
+        calls.append(kwargs)
+        return cli.WorkerUpdateResult(raw_results=(), clean_results=())
+
+    monkeypatch.setattr(cli, "run_update_latest", fake_run_update_latest)
+    exit_code = cli.main(
+        (
+            "update",
+            "--latest",
+            "--start-period",
+            "202501",
+            "--end-period",
+            "202606",
+            "--sources",
+            "population",
+            "--datasets",
+            "population",
+        )
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "sources": ("population",),
+            "datasets": ("population",),
+            "fallback_start_period": "202501",
+            "end_period": "202606",
+            "force_raw": False,
+        }
+    ]
+
+
+def test_update_command_requires_periods_without_latest() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(("update", "--sources", "population"))
+
+    assert exc_info.value.code == 2
+
+
+def test_clean_command_parses_rebuild_periods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fake_run_clean(**kwargs):
+        calls.append(kwargs)
+        return ()
+
+    monkeypatch.setattr(cli, "run_clean", fake_run_clean)
+    exit_code = cli.main(
+        (
+            "clean",
+            "--datasets",
+            "electricity,local_currency",
+            "--rebuild",
+            "--start-period",
+            "202601",
+            "--end-period",
+            "202602",
+        )
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "datasets": ("electricity", "local_currency"),
+            "rebuild": True,
+            "start_period": "202601",
+            "end_period": "202602",
+        }
+    ]
+
+
+def test_status_command_parses_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fake_run_status(**kwargs):
+        calls.append(kwargs)
+        return cli.WorkerStatusResult(source_statuses=())
+
+    monkeypatch.setattr(cli, "run_status", fake_run_status)
+    exit_code = cli.main(("status", "--sources", "population,mover"))
+
+    assert exit_code == 0
+    assert calls == [{"sources": ("population", "mover")}]

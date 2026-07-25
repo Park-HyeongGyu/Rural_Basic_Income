@@ -1,0 +1,13 @@
+[Unit]
+Description=Schedule Rural Basic Income dataset updates
+
+[Timer]
+# Copy this file to rbi-update.timer and choose the schedule before enabling.
+# Example:
+# OnCalendar=*-*-* 03:30:00
+OnCalendar=<USER_SELECTED_SCHEDULE>
+Persistent=true
+Unit=rbi-update.service
+
+[Install]
+WantedBy=timers.target

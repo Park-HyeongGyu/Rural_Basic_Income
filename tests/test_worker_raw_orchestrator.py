@@ -384,6 +384,91 @@ def test_refresh_raw_range_runs_periods_in_order(
     ]
 
 
+def test_refresh_raw_latest_uses_source_specific_last_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    last_success = {
+        "population": "202603",
+        "mover": None,
+    }
+    calls: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "source_last_success_period",
+        lambda source_name, *, engine=None: last_success[source_name],
+    )
+
+    def fake_refresh_raw_range(
+        start_period,
+        end_period,
+        *,
+        sources=None,
+        engine=None,
+        force=False,
+        source_options=None,
+        downloaders=None,
+        writer=None,
+        continue_on_unavailable=True,
+    ):
+        calls.append((sources[0], start_period, end_period))
+        return (
+            raw_orchestrator.RawRefreshResult(
+                source_name=sources[0],
+                period=start_period,
+                status="downloaded_written",
+                row_count=1,
+            ),
+        )
+
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "refresh_raw_range",
+        fake_refresh_raw_range,
+    )
+
+    results = raw_orchestrator.refresh_raw_latest(
+        sources=("population", "mover"),
+        engine=object(),
+        fallback_start_period="202501",
+        end_period="202605",
+    )
+
+    assert calls == [
+        ("population", "202604", "202605"),
+        ("mover", "202501", "202605"),
+    ]
+    assert [result.source_name for result in results] == ["population", "mover"]
+
+
+def test_refresh_raw_latest_skips_up_to_date_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "source_last_success_period",
+        lambda source_name, *, engine=None: "202606",
+    )
+
+    def fail_refresh_raw_range(*args, **kwargs):
+        raise AssertionError("up-to-date source should not be refreshed")
+
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "refresh_raw_range",
+        fail_refresh_raw_range,
+    )
+
+    results = raw_orchestrator.refresh_raw_latest(
+        sources=("population",),
+        engine=object(),
+        fallback_start_period="202501",
+        end_period="202606",
+    )
+
+    assert results == ()
+
+
 def test_refresh_raw_range_records_unavailable_periods_and_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

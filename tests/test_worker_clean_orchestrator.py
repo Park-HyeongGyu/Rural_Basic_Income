@@ -62,8 +62,16 @@ def test_run_clean_datasets_runs_requested_sql_files_in_order(
         "BEGIN; SELECT 2; COMMIT;",
     )
     specs = (
-        clean_orchestrator.CleanDatasetSpec("population", population_sql),
-        clean_orchestrator.CleanDatasetSpec("electricity", electricity_sql),
+        clean_orchestrator.CleanDatasetSpec(
+            "population",
+            population_sql,
+            ("clean_population",),
+        ),
+        clean_orchestrator.CleanDatasetSpec(
+            "electricity",
+            electricity_sql,
+            ("clean_electricity",),
+        ),
     )
     connection = RecordingConnection()
 
@@ -108,7 +116,9 @@ def test_run_clean_datasets_unlocks_and_rolls_back_failed_sql_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     broken_sql = write_sql(tmp_path / "broken.sql", "BEGIN; SELECT broken; COMMIT;")
-    specs = (clean_orchestrator.CleanDatasetSpec("broken", broken_sql),)
+    specs = (
+        clean_orchestrator.CleanDatasetSpec("broken", broken_sql, ("clean_broken",)),
+    )
     connection = RecordingConnection(fail_on_statement="SELECT broken")
 
     monkeypatch.setattr(clean_orchestrator, "CLEAN_DATASETS", specs)
@@ -139,3 +149,57 @@ def test_clean_dataset_specs_rejects_unknown_dataset() -> None:
         match="unknown clean dataset",
     ):
         clean_orchestrator.clean_dataset_specs(("not_a_dataset",))
+
+
+def test_run_clean_datasets_rebuild_deletes_periods_inside_sql_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    electricity_sql = write_sql(
+        tmp_path / "electricity.sql",
+        """
+        BEGIN;
+        CREATE SCHEMA IF NOT EXISTS clean;
+        CREATE TABLE IF NOT EXISTS clean.clean_electricity (date integer);
+        CREATE TEMP TABLE base AS SELECT 1;
+        COMMIT;
+        """,
+    )
+    specs = (
+        clean_orchestrator.CleanDatasetSpec(
+            "electricity",
+            electricity_sql,
+            ("clean_electricity",),
+        ),
+    )
+    connection = RecordingConnection()
+
+    monkeypatch.setattr(clean_orchestrator, "CLEAN_DATASETS", specs)
+    monkeypatch.setattr(clean_orchestrator, "DEFAULT_CLEAN_DATASETS", ("electricity",))
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "load_clean_dependencies",
+        lambda connection: {"region_merge_key_rows": 2},
+    )
+
+    clean_orchestrator.run_clean_datasets(
+        ("electricity",),
+        engine=RecordingEngine(connection),
+        rebuild=True,
+        start_period="202601",
+        end_period="202602",
+    )
+
+    sql_calls = [
+        call[1]
+        for call in connection.calls
+        if call[0] == "exec_driver_sql"
+    ]
+    delete_index = next(
+        index
+        for index, sql in enumerate(sql_calls)
+        if "DELETE FROM clean.\"clean_electricity\"" in sql
+    )
+    assert sql_calls[delete_index - 1].startswith("CREATE TABLE")
+    assert sql_calls[delete_index + 1].startswith("CREATE TEMP TABLE")
+    assert "202601, 202602" in sql_calls[delete_index]

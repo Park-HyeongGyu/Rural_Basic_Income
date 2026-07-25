@@ -13,7 +13,12 @@ from rural_basic_income.worker.download import (
     SourcePeriodDownload,
     SourcePeriodUnavailable,
 )
-from rural_basic_income.worker.periods import iter_month_periods, validate_period
+from rural_basic_income.worker.periods import (
+    current_month_period,
+    iter_month_periods,
+    next_month_period,
+    validate_period,
+)
 from rural_basic_income.worker import raw_writer
 from rural_basic_income.worker.sources import (
     electricity,
@@ -42,6 +47,7 @@ DEFAULT_RAW_SOURCES = (
     "electricity",
     "local_currency",
 )
+DEFAULT_LATEST_START_PERIOD = "202501"
 
 SOURCE_DOWNLOADERS: dict[str, DownloadFunction] = {
     "household": household.download_household,
@@ -171,6 +177,40 @@ def source_period_success_row_count(
     if row_count is None:
         return None
     return int(row_count or 0)
+
+
+def source_last_success_period(
+    source_name: str,
+    *,
+    engine: Engine | None = None,
+) -> str | None:
+    db_engine = engine or get_engine()
+    with db_engine.connect() as connection:
+        if not raw_writer.table_exists(
+            connection,
+            "metadata",
+            "download_status",
+        ):
+            return None
+
+        period = connection.execute(
+            text(
+                """
+                SELECT max(period)
+                FROM metadata.download_status
+                WHERE source_name = :source_name
+                  AND status = :status
+                """
+            ),
+            {
+                "source_name": source_name,
+                "status": raw_writer.DOWNLOAD_STATUS_OK,
+            },
+        ).scalar_one_or_none()
+
+    if period is None:
+        return None
+    return validate_period(str(period))
 
 
 def get_downloader(
@@ -525,4 +565,76 @@ def refresh_raw_range(
         end_period,
         len(results),
     )
+    return tuple(results)
+
+
+def refresh_raw_latest(
+    *,
+    sources: Sequence[str] | None = None,
+    engine: Engine | None = None,
+    force: bool = False,
+    fallback_start_period: str = DEFAULT_LATEST_START_PERIOD,
+    end_period: str | None = None,
+    source_options: Mapping[str, Mapping[str, Any]] | None = None,
+    downloaders: Mapping[str, DownloadFunction] | None = None,
+    writer: RawWriterFunction = raw_writer.write_source_period_download,
+    continue_on_unavailable: bool = True,
+) -> tuple[RawRefreshResult, ...]:
+    db_engine = engine or get_engine()
+    resolved_sources = tuple(sources or DEFAULT_RAW_SOURCES)
+    validated_end_period = validate_period(end_period or current_month_period())
+    validated_fallback = validate_period(fallback_start_period)
+    results: list[RawRefreshResult] = []
+
+    LOGGER.info(
+        "raw refresh latest start sources=%s fallback_start_period=%s "
+        "end_period=%s force=%s",
+        resolved_sources,
+        validated_fallback,
+        validated_end_period,
+        force,
+    )
+    for source_name in resolved_sources:
+        last_success = None if force else source_last_success_period(
+            source_name,
+            engine=db_engine,
+        )
+        source_start = (
+            next_month_period(last_success)
+            if last_success is not None
+            else validated_fallback
+        )
+        if source_start > validated_end_period:
+            LOGGER.info(
+                "raw refresh latest skipped up-to-date source=%s "
+                "last_success=%s end_period=%s",
+                source_name,
+                last_success,
+                validated_end_period,
+            )
+            continue
+
+        LOGGER.info(
+            "raw refresh latest source range source=%s start_period=%s "
+            "end_period=%s last_success=%s",
+            source_name,
+            source_start,
+            validated_end_period,
+            last_success,
+        )
+        results.extend(
+            refresh_raw_range(
+                source_start,
+                validated_end_period,
+                sources=(source_name,),
+                engine=db_engine,
+                force=force,
+                source_options=source_options,
+                downloaders=downloaders,
+                writer=writer,
+                continue_on_unavailable=continue_on_unavailable,
+            )
+        )
+
+    LOGGER.info("raw refresh latest complete results=%d", len(results))
     return tuple(results)

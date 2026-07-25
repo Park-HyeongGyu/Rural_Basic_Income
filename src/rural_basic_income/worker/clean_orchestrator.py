@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
 from rural_basic_income.db.connection import get_engine
+from rural_basic_income.worker.periods import iter_month_periods
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REGION_MERGE_KEY_PATH = (
@@ -40,6 +41,7 @@ class CleanOrchestratorError(RuntimeError):
 class CleanDatasetSpec:
     dataset_name: str
     sql_file: Path
+    clean_tables: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -53,22 +55,42 @@ CLEAN_DATASETS = (
     CleanDatasetSpec(
         "population",
         PROJECT_ROOT / "sql" / "clean" / "clean_population.sql",
+        (
+            "clean_population",
+            "clean_population_sex",
+            "clean_population_age",
+            "clean_population_sex_age",
+        ),
     ),
     CleanDatasetSpec(
         "mover",
         PROJECT_ROOT / "sql" / "clean" / "clean_mover.sql",
+        (
+            "clean_mover",
+            "clean_mover_sex",
+            "clean_mover_age",
+            "clean_mover_sex_age",
+        ),
     ),
     CleanDatasetSpec(
         "household",
         PROJECT_ROOT / "sql" / "clean" / "clean_household.sql",
+        ("clean_household",),
     ),
     CleanDatasetSpec(
         "electricity",
         PROJECT_ROOT / "sql" / "clean" / "clean_electricity.sql",
+        ("clean_electricity",),
     ),
     CleanDatasetSpec(
         "local_currency",
         PROJECT_ROOT / "sql" / "clean" / "clean_local_currency.sql",
+        (
+            "clean_local_currency",
+            "clean_local_currency_sex",
+            "clean_local_currency_age",
+            "clean_local_currency_sex_age",
+        ),
     ),
 )
 DEFAULT_CLEAN_DATASETS = tuple(spec.dataset_name for spec in CLEAN_DATASETS)
@@ -81,6 +103,49 @@ def read_sql_statements(path: Path) -> list[str]:
         for statement in sql.split(";")
         if statement.strip()
     ]
+
+
+def quote_identifier(identifier: str) -> str:
+    if not identifier or "\x00" in identifier:
+        raise CleanOrchestratorError(f"invalid SQL identifier: {identifier!r}")
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def setup_statement(statement: str) -> bool:
+    normalized = statement.strip().upper()
+    return (
+        normalized.startswith("CREATE SCHEMA")
+        or normalized.startswith("CREATE TABLE")
+        or normalized.startswith("CREATE UNIQUE INDEX")
+        or normalized.startswith("CREATE INDEX")
+    )
+
+
+def delete_clean_periods(
+    connection: Connection,
+    *,
+    clean_tables: Sequence[str],
+    periods: Sequence[str],
+) -> int:
+    validated_periods = tuple(iter_month_periods(periods[0], periods[-1]))
+    period_values = ", ".join(str(int(period)) for period in validated_periods)
+    deleted_tables = 0
+
+    for table_name in clean_tables:
+        LOGGER.info(
+            "clean rebuild delete table=clean.%s periods=%s",
+            table_name,
+            validated_periods,
+        )
+        connection.exec_driver_sql(
+            f"""
+            DELETE FROM clean.{quote_identifier(table_name)}
+            WHERE date IN ({period_values})
+            """
+        )
+        deleted_tables += 1
+
+    return deleted_tables
 
 
 def load_region_merge_key(
@@ -233,7 +298,13 @@ def clean_dataset_specs(
     return tuple(specs_by_name[dataset_name] for dataset_name in requested)
 
 
-def run_sql_file(connection: Connection, path: Path) -> int:
+def run_sql_file(
+    connection: Connection,
+    path: Path,
+    *,
+    rebuild_tables: Sequence[str] = (),
+    rebuild_periods: Sequence[str] = (),
+) -> int:
     statements = read_sql_statements(path)
     LOGGER.info(
         "clean sql file execute start file=%s statements=%d",
@@ -241,7 +312,27 @@ def run_sql_file(connection: Connection, path: Path) -> int:
         len(statements),
     )
     try:
+        in_transaction = False
+        rebuild_deleted = False
         for statement in statements:
+            if statement.upper() == "BEGIN":
+                connection.exec_driver_sql(statement)
+                in_transaction = True
+                continue
+
+            if (
+                in_transaction
+                and rebuild_tables
+                and rebuild_periods
+                and not rebuild_deleted
+                and not setup_statement(statement)
+            ):
+                delete_clean_periods(
+                    connection,
+                    clean_tables=rebuild_tables,
+                    periods=rebuild_periods,
+                )
+                rebuild_deleted = True
             connection.exec_driver_sql(statement)
     except Exception:
         LOGGER.exception(
@@ -263,15 +354,27 @@ def run_clean_datasets(
     datasets: Sequence[str] | None = None,
     *,
     engine: Engine | None = None,
+    rebuild: bool = False,
+    start_period: str | None = None,
+    end_period: str | None = None,
 ) -> tuple[CleanDatasetResult, ...]:
     """Run clean SQL files with each SQL file owning its transaction boundary."""
     db_engine = engine or get_engine()
     specs = clean_dataset_specs(datasets)
     results: list[CleanDatasetResult] = []
+    rebuild_periods: tuple[str, ...] = ()
+    if rebuild:
+        if not start_period or not end_period:
+            raise CleanOrchestratorError(
+                "clean rebuild requires start_period and end_period"
+            )
+        rebuild_periods = tuple(iter_month_periods(start_period, end_period))
 
     LOGGER.info(
-        "clean datasets start datasets=%s",
+        "clean datasets start datasets=%s rebuild=%s periods=%s",
         tuple(spec.dataset_name for spec in specs),
+        rebuild,
+        rebuild_periods,
     )
     with db_engine.connect() as base_connection:
         connection = base_connection.execution_options(isolation_level="AUTOCOMMIT")
@@ -288,7 +391,12 @@ def run_clean_datasets(
                     spec.dataset_name,
                     spec.sql_file,
                 )
-                statement_count = run_sql_file(connection, spec.sql_file)
+                statement_count = run_sql_file(
+                    connection,
+                    spec.sql_file,
+                    rebuild_tables=spec.clean_tables if rebuild else (),
+                    rebuild_periods=rebuild_periods,
+                )
                 results.append(
                     CleanDatasetResult(
                         dataset_name=spec.dataset_name,

@@ -2,15 +2,15 @@
 
 농어촌기본소득 연구용 자체 호스팅 웹 프로젝트입니다.
 
-현재 `v0.2.0`은 `v0.1.0`에서 완성한 시계열 웹 대시보드를 유지하면서, 수동 one-shot `rbi-worker`와 신규 지표 적재 기반을 추가합니다.
+현재 `v0.3.0` 개발 브랜치는 `v0.2.0`에서 완성한 수동 데이터 갱신 흐름을 `rbi` CLI와 host systemd timer 구조로 정리하고 있습니다.
 
 ## Branch Workflow
 
 - `main`: 안정 릴리즈 기준점
-- `v0.2.0`: v0.2.0 기능 통합 브랜치
-- `feat/v0.2.0-*`: `v0.2.0`에서 분기하는 개별 기능 브랜치
+- `v0.3.0`: v0.3.0 기능 통합 브랜치
+- `feat/v0.3.0-*`: `v0.3.0`에서 분기하는 개별 기능 브랜치
 
-기능 구현은 `v0.2.0`에서 기능 브랜치를 만들고, 검증 후 다시 `v0.2.0`으로 머지합니다.
+기능 구현은 `v0.3.0`에서 기능 브랜치를 만들고, 검증 후 다시 `v0.3.0`으로 머지합니다.
 
 ## Scope
 
@@ -35,20 +35,27 @@ v0.2.0에서 구현한 방향:
 - 전력사용량, 지역화폐 결제정보 clean SQL 추가
 - 신규 clean table을 기존 웹에서 조회
 
-v0.2.0에서 제외하는 기능:
+v0.3.0에서 구현 중인 방향:
 
-- systemd timer
-- Redis, Celery
-- 상시 실행 worker
-- 웹 요청 기반 분석
+- canonical `rbi` CLI
+- `rbi update --latest`
+- `rbi clean --rebuild`
+- `rbi status`
+- source별 latest period 탐색
+- update-level advisory lock
+- host user systemd timer가 `podman exec rbi-web rbi update --latest` 실행
+- scheduled updater container 제거
+
+v0.3.0에서 현재 제외하는 기능:
+
+- updater container
+- data update Celery task
+- container 내부 cron/systemd timer
 - 지도 UI
 - 로그인 및 관리자 페이지
 - React 또는 Vue 기반 SPA
 - 별도 migration framework
-- 경제적, 통계적 runtime validation
-- 인허가 데이터
-- worker 정기 실행 timer
-- worker export/status 하위 명령
+- 새로운 외부 데이터 source
 
 ## Repository Layout
 
@@ -143,15 +150,21 @@ DATA_GO_KR_API_KEY=your-api-key
 Download raw data for a period range and then run clean SQL:
 
 ```bash
-.venv/bin/rbi-worker update \
+.venv/bin/rbi update \
   --start-period 202501 \
   --end-period 202606
+```
+
+Refresh from each source's last successful period through the current month:
+
+```bash
+.venv/bin/rbi update --latest
 ```
 
 Limit the raw sources or clean datasets when needed:
 
 ```bash
-.venv/bin/rbi-worker update \
+.venv/bin/rbi update \
   --start-period 202601 \
   --end-period 202601 \
   --sources electricity,local_currency \
@@ -161,7 +174,7 @@ Limit the raw sources or clean datasets when needed:
 Use `--force-raw` only when a raw source x period should be downloaded again and atomically replaced. This does not rebuild existing clean rows:
 
 ```bash
-.venv/bin/rbi-worker update \
+.venv/bin/rbi update \
   --start-period 202601 \
   --end-period 202601 \
   --sources electricity \
@@ -171,37 +184,53 @@ Use `--force-raw` only when a raw source x period should be downloaded again and
 
 If a forced raw refresh receives no usable data, any previous successful raw data and success metadata for that source x period remain canonical.
 
+Rebuild existing clean rows only through the explicit clean command:
+
+```bash
+.venv/bin/rbi clean \
+  --datasets electricity \
+  --start-period 202601 \
+  --end-period 202601 \
+  --rebuild
+```
+
+Inspect source download status:
+
+```bash
+.venv/bin/rbi status
+```
+
 The worker writes raw payload chunks to `raw_json.payloads`, raw rows to `raw.*`, source-period metadata to `metadata.download_status`, and clean tables to `clean.*`. In `metadata.download_status`, `status = 1` means the source-period was written successfully and `status = 2` means the source returned no usable data or a non-standard response and will be retried on a later run.
 
 ## Container Image
 
-Build the v0.2.0 image locally:
+Build the v0.3.0 image locally:
 
 ```bash
-podman build -t localhost/rural-basic-income:0.2.0 -f Containerfile .
+podman build -t localhost/rural-basic-income:0.3.0 -f Containerfile .
 ```
 
 Move the image to another machine with a tar archive:
 
 ```bash
-podman save localhost/rural-basic-income:0.2.0 -o rural-basic-income-0.2.0.tar
-rsync -av rural-basic-income-0.2.0.tar user@server:/tmp/
-ssh user@server 'podman load -i /tmp/rural-basic-income-0.2.0.tar'
+podman save localhost/rural-basic-income:0.3.0 -o rural-basic-income-0.3.0.tar
+rsync -av rural-basic-income-0.3.0.tar user@server:/tmp/
+ssh user@server 'podman load -i /tmp/rural-basic-income-0.3.0.tar'
 ```
 
 Or stream it over SSH without leaving a tar file locally:
 
 ```bash
-podman save localhost/rural-basic-income:0.2.0 | ssh user@server 'podman load'
+podman save localhost/rural-basic-income:0.3.0 | ssh user@server 'podman load'
 ```
 
 ## Quadlet Deployment
 
-The deployment assumes the PostgreSQL volume already exists on the server. Install the pod, database, web, and worker Quadlet files:
+The deployment assumes the PostgreSQL volume already exists on the server. Install the pod, database, and web Quadlet files:
 
 ```bash
 mkdir -p ~/.config/containers/systemd
-cp deploy/quadlet/rbi-pod.pod deploy/quadlet/rbi-postgres.container deploy/quadlet/rbi-web.container deploy/quadlet/rbi-worker.container ~/.config/containers/systemd/
+cp deploy/quadlet/rbi-pod.pod deploy/quadlet/rbi-postgres.container deploy/quadlet/rbi-web.container ~/.config/containers/systemd/
 systemctl --user daemon-reload
 systemctl --user start rbi-pod.service
 systemctl --user start rbi-postgres.service
@@ -217,15 +246,25 @@ curl http://127.0.0.1:8000/health/live
 curl http://127.0.0.1:8000/health/ready
 ```
 
-Run the one-shot worker manually:
+Run a manual update inside the running web container:
 
 ```bash
-systemctl --user start rbi-worker.service
-systemctl --user status rbi-worker.service
+podman exec rbi-web rbi update --latest
 ```
 
-Follow worker logs while it downloads, writes raw data, and runs clean SQL:
+Install a host user systemd timer template for scheduled updates:
 
 ```bash
-journalctl --user -u rbi-worker.service -n 200 -f
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/rbi-update.service ~/.config/systemd/user/
+cp deploy/systemd/rbi-update.timer.example ~/.config/systemd/user/rbi-update.timer
+systemctl --user daemon-reload
+```
+
+Edit `~/.config/systemd/user/rbi-update.timer` and replace `OnCalendar=<USER_SELECTED_SCHEDULE>` with the desired schedule before enabling it:
+
+```bash
+systemctl --user enable --now rbi-update.timer
+systemctl --user list-timers
+journalctl --user -u rbi-update.service -n 200 -f
 ```

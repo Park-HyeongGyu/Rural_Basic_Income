@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 
 def validate_period(period: str) -> str:
     if len(period) != 6 or not period.isdigit():
@@ -34,3 +36,19 @@ def iter_month_periods(start_period: str, end_period: str) -> list[str]:
             month = 1
 
     return periods
+
+
+def next_month_period(period: str) -> str:
+    validated_period = validate_period(period)
+    year = int(validated_period[:4])
+    month = int(validated_period[4:6])
+    month += 1
+    if month == 13:
+        year += 1
+        month = 1
+    return f"{year:04d}{month:02d}"
+
+
+def current_month_period(today: date | None = None) -> str:
+    current_date = today or date.today()
+    return f"{current_date.year:04d}{current_date.month:02d}"
