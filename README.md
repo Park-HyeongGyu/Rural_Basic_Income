@@ -169,7 +169,7 @@ Use `--force` only when a source x period should be downloaded again and atomica
   --force
 ```
 
-The worker writes raw payload chunks to `raw_json.payloads`, raw rows to `raw.*`, source-period success metadata to `metadata.download_status`, and clean tables to `clean.*`.
+The worker writes raw payload chunks to `raw_json.payloads`, raw rows to `raw.*`, source-period metadata to `metadata.download_status`, and clean tables to `clean.*`. In `metadata.download_status`, `status = 1` means the source-period was written successfully and `status = 2` means the source returned no usable data or a non-standard response and will be retried on a later run.
 
 ## Container Image
 
@@ -220,4 +220,10 @@ Run the one-shot worker manually:
 ```bash
 systemctl --user start rbi-worker.service
 systemctl --user status rbi-worker.service
+```
+
+Follow worker logs while it downloads, writes raw data, and runs clean SQL:
+
+```bash
+journalctl --user -u rbi-worker.service -n 200 -f
 ```

@@ -310,30 +310,3 @@ def run_clean_datasets(
 
     LOGGER.info("clean datasets complete results=%d", len(results))
     return tuple(results)
-
-
-def run_clean_sql(engine: Engine | None = None) -> dict[str, int]:
-    """Compatibility return shape for the old pipeline clean runner."""
-    executed_counts: dict[str, int] = {}
-    db_engine = engine or get_engine()
-
-    with db_engine.connect() as base_connection:
-        connection = base_connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(
-            text("SELECT pg_advisory_lock(hashtext(:lock_key))"),
-            {"lock_key": CLEAN_SQL_LOCK_KEY},
-        )
-        try:
-            executed_counts.update(load_clean_dependencies(connection))
-            for spec in clean_dataset_specs():
-                executed_counts[spec.sql_file.name] = run_sql_file(
-                    connection,
-                    spec.sql_file,
-                )
-        finally:
-            connection.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:lock_key))"),
-                {"lock_key": CLEAN_SQL_LOCK_KEY},
-            )
-
-    return executed_counts

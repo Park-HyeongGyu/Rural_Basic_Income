@@ -139,27 +139,3 @@ def test_clean_dataset_specs_rejects_unknown_dataset() -> None:
         match="unknown clean dataset",
     ):
         clean_orchestrator.clean_dataset_specs(("not_a_dataset",))
-
-
-def test_legacy_run_clean_sql_returns_statement_counts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sql_file = write_sql(tmp_path / "one.sql", "BEGIN; SELECT 1; COMMIT;")
-    specs = (clean_orchestrator.CleanDatasetSpec("one", sql_file),)
-    connection = RecordingConnection()
-
-    monkeypatch.setattr(clean_orchestrator, "CLEAN_DATASETS", specs)
-    monkeypatch.setattr(clean_orchestrator, "DEFAULT_CLEAN_DATASETS", ("one",))
-    monkeypatch.setattr(
-        clean_orchestrator,
-        "load_clean_dependencies",
-        lambda connection: {"region_merge_key_rows": 2},
-    )
-
-    result = clean_orchestrator.run_clean_sql(engine=RecordingEngine(connection))
-
-    assert result == {
-        "region_merge_key_rows": 2,
-        "one.sql": 3,
-    }
