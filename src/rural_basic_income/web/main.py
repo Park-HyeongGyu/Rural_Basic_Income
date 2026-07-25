@@ -19,7 +19,7 @@ WEB_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEB_DIR / "static"
 TEMPLATES_DIR = WEB_DIR / "templates"
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
-STATIC_ASSETS = ("styles.css", "line_graph.js", "app.js")
+STATIC_ASSETS = ("styles.css", "line_graph.js", "app.js", "analysis.js")
 
 
 @lru_cache

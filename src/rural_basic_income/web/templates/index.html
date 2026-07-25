@@ -8,6 +8,7 @@
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
     <script src="{{ url_for('static', path='line_graph.js') }}?v={{ static_versions['line_graph.js'] }}" defer></script>
     <script src="{{ url_for('static', path='app.js') }}?v={{ static_versions['app.js'] }}" defer></script>
+    <script src="{{ url_for('static', path='analysis.js') }}?v={{ static_versions['analysis.js'] }}" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -18,7 +19,12 @@
       <div class="version">v{{ app_version }}</div>
     </header>
 
-    <main class="layout">
+    <nav class="view-tabs" aria-label="화면 선택">
+      <button class="tab-button is-active" type="button" data-view-target="dashboard-view">지표</button>
+      <button class="tab-button" type="button" data-view-target="analysis-view">분석</button>
+    </nav>
+
+    <main class="layout app-view" id="dashboard-view">
       <section class="controls" aria-label="조회 조건">
         <div class="control-grid">
           <label class="field">
@@ -76,6 +82,134 @@
               </tr>
             </thead>
             <tbody id="data-status-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <main class="analysis-layout app-view is-hidden" id="analysis-view">
+      <section class="analysis-controls" aria-label="분석 조건">
+        <div class="section-heading">
+          <h2>분석 조건</h2>
+          <span id="analysis-options-status">불러오는 중</span>
+        </div>
+
+        <div class="analysis-form-grid">
+          <label class="field">
+            <span>테이블</span>
+            <select id="analysis-table-select"></select>
+          </label>
+          <label class="field">
+            <span>변수</span>
+            <select id="analysis-variable-select"></select>
+          </label>
+          <label class="field">
+            <span>시작월</span>
+            <select id="analysis-start-period"></select>
+          </label>
+          <label class="field">
+            <span>종료월</span>
+            <select id="analysis-end-period"></select>
+          </label>
+          <label class="field">
+            <span>정규화 기준월</span>
+            <select id="analysis-base-period"></select>
+          </label>
+          <div class="filter-grid analysis-filter-grid" id="analysis-filter-grid"></div>
+        </div>
+
+        <div class="analysis-region-grid">
+          <section class="region-picker" aria-label="처리지역">
+            <div class="panel-heading">
+              <span>처리지역</span>
+              <button class="text-button" id="add-treatment-region" type="button">추가</button>
+            </div>
+            <div class="region-picker-grid">
+              <label class="field">
+                <span>시도</span>
+                <select id="treatment-sido-select"></select>
+              </label>
+              <label class="field">
+                <span>시군구</span>
+                <select id="treatment-sigungu-select"></select>
+              </label>
+              <label class="field">
+                <span>처리 시작월</span>
+                <select id="treatment-period-select"></select>
+              </label>
+            </div>
+            <div class="selected-region-list" id="treatment-region-list"></div>
+          </section>
+
+          <section class="region-picker" aria-label="비교지역">
+            <div class="panel-heading">
+              <span>비교지역</span>
+              <button class="text-button" id="add-control-region" type="button">추가</button>
+            </div>
+            <div class="region-picker-grid control-region-grid">
+              <label class="field">
+                <span>시도</span>
+                <select id="control-sido-select"></select>
+              </label>
+              <label class="field">
+                <span>시군구</span>
+                <select id="control-sigungu-select"></select>
+              </label>
+            </div>
+            <div class="selected-region-list" id="control-region-list"></div>
+          </section>
+        </div>
+
+        <div class="analysis-actions">
+          <button id="analysis-run-button" type="button">분석 실행</button>
+          <button class="text-button" id="analysis-rerun-button" type="button">캐시 무시 실행</button>
+        </div>
+      </section>
+
+      <section class="analysis-results" aria-label="분석 결과">
+        <div class="section-heading">
+          <h2>분석 결과</h2>
+          <span id="analysis-result-badge"></span>
+        </div>
+        <div class="status-line" id="analysis-status-line">분석 조건을 선택하세요</div>
+
+        <div class="analysis-summary-grid" id="analysis-summary-grid">
+          <div class="summary-item">
+            <span>TWFE 추정치</span>
+            <strong id="twfe-estimate">-</strong>
+          </div>
+          <div class="summary-item">
+            <span>표준오차</span>
+            <strong id="twfe-standard-error">-</strong>
+          </div>
+          <div class="summary-item">
+            <span>관측치</span>
+            <strong id="analysis-observations">-</strong>
+          </div>
+          <div class="summary-item">
+            <span>지역</span>
+            <strong id="analysis-regions">-</strong>
+          </div>
+        </div>
+
+        <div class="analysis-warning-list" id="analysis-warning-list"></div>
+
+        <div class="chart-box analysis-chart-box">
+          <div id="event-study-chart"></div>
+        </div>
+
+        <div class="analysis-table-wrap">
+          <table class="status-table analysis-result-table">
+            <thead>
+              <tr>
+                <th>Event Time</th>
+                <th>Estimate</th>
+                <th>Std. Error</th>
+                <th>95% CI</th>
+                <th>Obs.</th>
+              </tr>
+            </thead>
+            <tbody id="event-study-body"></tbody>
           </table>
         </div>
       </section>
