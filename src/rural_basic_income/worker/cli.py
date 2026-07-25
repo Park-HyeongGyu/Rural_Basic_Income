@@ -89,7 +89,7 @@ def run_update(
     end_period: str,
     sources: Sequence[str] | None = None,
     datasets: Sequence[str] | None = None,
-    force: bool = False,
+    force_raw: bool = False,
     engine: Engine | None = None,
     raw_runner: RawRangeRunner = raw_orchestrator.refresh_raw_range,
     clean_runner: CleanRunner = clean_orchestrator.run_clean_datasets,
@@ -99,21 +99,21 @@ def run_update(
 
     LOGGER.info(
         "worker update start start_period=%s end_period=%s sources=%s "
-        "datasets=%s force=%s",
+        "datasets=%s force_raw=%s",
         start_period,
         end_period,
         tuple(sources) if sources is not None else raw_orchestrator.DEFAULT_RAW_SOURCES,
         tuple(datasets)
         if datasets is not None
         else clean_orchestrator.DEFAULT_CLEAN_DATASETS,
-        force,
+        force_raw,
     )
     raw_results = raw_runner(
         start_period,
         end_period,
         sources=sources,
         engine=db_engine,
-        force=force,
+        force=force_raw,
     )
     print_raw_results(raw_results, output=output)
 
@@ -142,7 +142,7 @@ def run_update_command(args: argparse.Namespace) -> int:
         end_period=args.end_period,
         sources=sources,
         datasets=datasets,
-        force=args.force,
+        force_raw=args.force_raw,
     )
     return 0
 
@@ -187,9 +187,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     update_parser.add_argument(
+        "--force-raw",
+        action="store_true",
+        dest="force_raw",
+        help=(
+            "redownload and atomically replace raw source-period data even if "
+            "already successful; this does not rebuild existing clean rows"
+        ),
+    )
+    update_parser.add_argument(
         "--force",
         action="store_true",
-        help="redownload and replace raw source-period data even if already successful",
+        dest="force_raw",
+        help=argparse.SUPPRESS,
     )
     update_parser.add_argument(
         "--log-level",

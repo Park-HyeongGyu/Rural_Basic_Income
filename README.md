@@ -158,7 +158,7 @@ Limit the raw sources or clean datasets when needed:
   --datasets electricity,local_currency
 ```
 
-Use `--force` only when a source x period should be downloaded again and atomically replaced:
+Use `--force-raw` only when a raw source x period should be downloaded again and atomically replaced. This does not rebuild existing clean rows:
 
 ```bash
 .venv/bin/rbi-worker update \
@@ -166,8 +166,10 @@ Use `--force` only when a source x period should be downloaded again and atomica
   --end-period 202601 \
   --sources electricity \
   --datasets electricity \
-  --force
+  --force-raw
 ```
+
+If a forced raw refresh receives no usable data, any previous successful raw data and success metadata for that source x period remain canonical.
 
 The worker writes raw payload chunks to `raw_json.payloads`, raw rows to `raw.*`, source-period metadata to `metadata.download_status`, and clean tables to `clean.*`. In `metadata.download_status`, `status = 1` means the source-period was written successfully and `status = 2` means the source returned no usable data or a non-standard response and will be retried on a later run.
 

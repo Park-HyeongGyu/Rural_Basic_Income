@@ -163,6 +163,88 @@ def test_refresh_source_period_force_downloads_even_if_existing(
     assert calls == [("download", "202604"), ("writer", True)]
 
 
+def test_force_unavailable_preserves_existing_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "source_period_success_row_count",
+        lambda source_name, period, *, engine=None: 99,
+    )
+
+    def unavailable_downloader(period: str):
+        raise SourcePeriodUnavailable("KOSIS data unavailable: 30 데이터가 존재하지 않습니다.")
+
+    def fail_writer(download, *, engine=None, force=False):
+        raise AssertionError("unavailable force refresh should not write raw rows")
+
+    def fail_mark_unavailable(**kwargs):
+        raise AssertionError("existing success metadata should be preserved")
+
+    monkeypatch.setattr(
+        raw_writer,
+        "mark_source_period_unavailable",
+        fail_mark_unavailable,
+    )
+
+    result = raw_orchestrator.refresh_source_period(
+        "mover",
+        "202604",
+        engine=object(),
+        force=True,
+        downloaders={"mover": unavailable_downloader},
+        writer=fail_writer,
+    )
+
+    assert result.status == "skipped_unavailable_existing"
+    assert result.row_count == 99
+    assert result.unavailable
+    assert result.preserved_existing
+
+
+def test_force_zero_row_download_preserves_existing_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "source_period_success_row_count",
+        lambda source_name, period, *, engine=None: 12,
+    )
+
+    def empty_downloader(period: str):
+        return make_download(
+            "local_currency",
+            period,
+            raw_rows=(),
+        )
+
+    def fail_writer(download, *, engine=None, force=False):
+        raise AssertionError("zero-row force refresh should not write raw rows")
+
+    def fail_mark_unavailable(**kwargs):
+        raise AssertionError("existing success metadata should be preserved")
+
+    monkeypatch.setattr(
+        raw_writer,
+        "mark_source_period_unavailable",
+        fail_mark_unavailable,
+    )
+
+    result = raw_orchestrator.refresh_source_period(
+        "local_currency",
+        "202604",
+        engine=object(),
+        force=True,
+        downloaders={"local_currency": empty_downloader},
+        writer=fail_writer,
+    )
+
+    assert result.status == "skipped_unavailable_existing"
+    assert result.row_count == 12
+    assert result.unavailable
+    assert result.preserved_existing
+
+
 def test_refresh_source_period_reports_writer_skip_after_download(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

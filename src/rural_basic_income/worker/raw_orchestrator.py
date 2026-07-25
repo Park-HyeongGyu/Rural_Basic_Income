@@ -28,6 +28,7 @@ LOGGER = logging.getLogger(__name__)
 RawRefreshStatus = Literal[
     "skipped_existing",
     "skipped_unavailable",
+    "skipped_unavailable_existing",
     "downloaded_written",
     "downloaded_skipped",
 ]
@@ -68,7 +69,14 @@ class RawRefreshResult:
 
     @property
     def unavailable(self) -> bool:
-        return self.status == "skipped_unavailable"
+        return self.status in {
+            "skipped_unavailable",
+            "skipped_unavailable_existing",
+        }
+
+    @property
+    def preserved_existing(self) -> bool:
+        return self.status == "skipped_unavailable_existing"
 
 
 @dataclass(frozen=True)
@@ -271,28 +279,27 @@ def _refresh_source_period(
         validated_period,
         force,
     )
-    if not force:
-        existing_row_count = source_period_success_row_count(
+    existing_row_count = source_period_success_row_count(
+        source_name,
+        validated_period,
+        engine=db_engine,
+    )
+    if existing_row_count is not None and not force:
+        LOGGER.info(
+            "raw refresh skipped existing source=%s period=%s rows=%d",
             source_name,
             validated_period,
-            engine=db_engine,
+            existing_row_count,
         )
-        if existing_row_count is not None:
-            LOGGER.info(
-                "raw refresh skipped existing source=%s period=%s rows=%d",
-                source_name,
-                validated_period,
-                existing_row_count,
-            )
-            return (
-                RawRefreshResult(
-                    source_name=source_name,
-                    period=validated_period,
-                    status="skipped_existing",
-                    row_count=existing_row_count,
-                ),
-                None,
-            )
+        return (
+            RawRefreshResult(
+                source_name=source_name,
+                period=validated_period,
+                status="skipped_existing",
+                row_count=existing_row_count,
+            ),
+            None,
+        )
 
     try:
         download = download_source_period(
@@ -304,6 +311,13 @@ def _refresh_source_period(
     except Exception as exc:
         unavailable_message = source_period_unavailable_message(exc)
         if allow_unavailable and unavailable_message:
+            if force and existing_row_count is not None:
+                return preserve_existing_source_period_after_unavailable(
+                    source_name=source_name,
+                    period=validated_period,
+                    row_count=existing_row_count,
+                    message=unavailable_message,
+                )
             return mark_unavailable_source_period(
                 source_name=source_name,
                 period=validated_period,
@@ -313,13 +327,21 @@ def _refresh_source_period(
         raise
 
     if allow_unavailable and download.raw_row_count == 0:
+        unavailable_message = (
+            f"{download.source_name} source returned no rows "
+            f"for period {validated_period}"
+        )
+        if force and existing_row_count is not None:
+            return preserve_existing_source_period_after_unavailable(
+                source_name=source_name,
+                period=validated_period,
+                row_count=existing_row_count,
+                message=unavailable_message,
+            )
         return mark_unavailable_source_period(
             source_name=source_name,
             period=validated_period,
-            message=(
-                f"{download.source_name} source returned no rows "
-                f"for period {validated_period}"
-            ),
+            message=unavailable_message,
             engine=db_engine,
         )
 
@@ -385,6 +407,32 @@ def mark_unavailable_source_period(
             period=period,
             status="skipped_unavailable",
             row_count=0,
+        ),
+        None,
+    )
+
+
+def preserve_existing_source_period_after_unavailable(
+    *,
+    source_name: str,
+    period: str,
+    row_count: int,
+    message: str,
+) -> tuple[RawRefreshResult, None]:
+    LOGGER.warning(
+        "raw refresh force unavailable; keeping existing success "
+        "source=%s period=%s existing_rows=%d message=%s",
+        source_name,
+        period,
+        row_count,
+        message,
+    )
+    return (
+        RawRefreshResult(
+            source_name=source_name,
+            period=period,
+            status="skipped_unavailable_existing",
+            row_count=row_count,
         ),
         None,
     )

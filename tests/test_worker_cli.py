@@ -67,7 +67,7 @@ def test_run_update_runs_raw_then_clean_with_selected_options() -> None:
         end_period="202602",
         sources=("population",),
         datasets=("population",),
-        force=True,
+        force_raw=True,
         engine=engine,
         raw_runner=raw_runner,
         clean_runner=clean_runner,
@@ -109,7 +109,7 @@ def test_update_command_parses_sources_and_datasets(
             "population",
             "--datasets",
             "electricity,local_currency",
-            "--force",
+            "--force-raw",
         )
     )
 
@@ -120,7 +120,7 @@ def test_update_command_parses_sources_and_datasets(
             "end_period": "202602",
             "sources": ("population", "mover", "electricity"),
             "datasets": ("population", "electricity", "local_currency"),
-            "force": True,
+            "force_raw": True,
         }
     ]
 
@@ -152,6 +152,31 @@ def test_update_command_uses_default_sources_and_datasets(
             "end_period": "202601",
             "sources": None,
             "datasets": None,
-            "force": False,
+            "force_raw": False,
         }
     ]
+
+
+def test_update_command_accepts_legacy_force_as_raw_force(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fake_run_update(**kwargs):
+        calls.append(kwargs)
+        return cli.WorkerUpdateResult(raw_results=(), clean_results=())
+
+    monkeypatch.setattr(cli, "run_update", fake_run_update)
+    exit_code = cli.main(
+        (
+            "update",
+            "--start-period",
+            "202601",
+            "--end-period",
+            "202601",
+            "--force",
+        )
+    )
+
+    assert exit_code == 0
+    assert calls[0]["force_raw"] is True
