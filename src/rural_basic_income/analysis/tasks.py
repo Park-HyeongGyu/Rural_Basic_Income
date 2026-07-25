@@ -8,6 +8,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from rural_basic_income.analysis.cache import (
     ANALYSIS_VERSION,
+    clear_running_task,
     fetch_data_revision,
     make_analysis_cache_key,
     read_cached_result,
@@ -44,9 +45,12 @@ def create_redis_client(settings: Settings | None = None) -> Redis:
     return Redis.from_url(resolved_settings.redis_url, decode_responses=True)
 
 
-@app.task(name="rural_basic_income.analysis.run")
-def run_analysis_task(payload: dict[str, Any]) -> dict[str, Any]:
-    return run_analysis_job(payload)
+@app.task(bind=True, name="rural_basic_income.analysis.run")
+def run_analysis_task(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    return run_analysis_job(
+        payload,
+        running_task_id=str(self.request.id) if self.request.id else None,
+    )
 
 
 def run_analysis_job(
@@ -59,6 +63,7 @@ def run_analysis_job(
     panel_loader: PanelLoader = load_analysis_panel,
     twfe_runner: TwfeRunner = fit_twfe_did,
     event_study_runner: EventStudyRunner = fit_traditional_event_study,
+    running_task_id: str | None = None,
 ) -> dict[str, Any]:
     resolved_settings = settings or get_settings()
     request = parse_analysis_request(payload)
@@ -73,6 +78,7 @@ def run_analysis_job(
             panel_loader=panel_loader,
             twfe_runner=twfe_runner,
             event_study_runner=event_study_runner,
+            running_task_id=running_task_id,
         )
 
     db_engine = engine or get_engine()
@@ -86,6 +92,7 @@ def run_analysis_job(
             panel_loader=panel_loader,
             twfe_runner=twfe_runner,
             event_study_runner=event_study_runner,
+            running_task_id=running_task_id,
         )
 
 
@@ -99,6 +106,7 @@ def run_analysis_job_with_connection(
     panel_loader: PanelLoader,
     twfe_runner: TwfeRunner,
     event_study_runner: EventStudyRunner,
+    running_task_id: str | None,
 ) -> dict[str, Any]:
     data_revision = fetch_data_revision(connection)
     cache_key = make_analysis_cache_key(payload, data_revision=data_revision)
@@ -106,42 +114,46 @@ def run_analysis_job_with_connection(
         redis_client if redis_client is not None else create_redis_client(settings)
     )
 
-    if not request.force:
-        cached_result = read_cached_result(cache_client, cache_key)
-        if cached_result is not None:
-            return {
-                "status": "success",
-                "cached": True,
-                "cache_key": cache_key,
-                "data_revision": data_revision,
-                "analysis_version": ANALYSIS_VERSION,
-                "result": cached_result,
-            }
+    try:
+        if not request.force:
+            cached_result = read_cached_result(cache_client, cache_key)
+            if cached_result is not None:
+                return {
+                    "status": "success",
+                    "cached": True,
+                    "cache_key": cache_key,
+                    "data_revision": data_revision,
+                    "analysis_version": ANALYSIS_VERSION,
+                    "result": cached_result,
+                }
 
-    loaded_panel = panel_loader(connection, request.outcome, request.spec)
-    twfe_result = twfe_runner(loaded_panel.panel.data)
-    event_study_result = event_study_runner(loaded_panel.panel.data)
+        loaded_panel = panel_loader(connection, request.outcome, request.spec)
+        twfe_result = twfe_runner(loaded_panel.panel.data)
+        event_study_result = event_study_runner(loaded_panel.panel.data)
 
-    result = analysis_result_to_dict(
-        request=request,
-        panel=loaded_panel.panel,
-        twfe_result=twfe_result,
-        event_study_result=event_study_result,
-    )
-    write_cached_result(
-        cache_client,
-        cache_key,
-        result,
-        ttl_seconds=settings.analysis_cache_ttl_seconds,
-    )
-    return {
-        "status": "success",
-        "cached": False,
-        "cache_key": cache_key,
-        "data_revision": data_revision,
-        "analysis_version": ANALYSIS_VERSION,
-        "result": result,
-    }
+        result = analysis_result_to_dict(
+            request=request,
+            panel=loaded_panel.panel,
+            twfe_result=twfe_result,
+            event_study_result=event_study_result,
+        )
+        write_cached_result(
+            cache_client,
+            cache_key,
+            result,
+            ttl_seconds=settings.analysis_cache_ttl_seconds,
+        )
+        return {
+            "status": "success",
+            "cached": False,
+            "cache_key": cache_key,
+            "data_revision": data_revision,
+            "analysis_version": ANALYSIS_VERSION,
+            "result": result,
+        }
+    finally:
+        if running_task_id is not None:
+            clear_running_task(cache_client, cache_key, task_id=running_task_id)
 
 
 def analysis_result_to_dict(

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     analysis_cache_ttl_seconds: int = 60 * 60 * 24 * 30
     analysis_task_soft_time_limit_seconds: int = 60 * 20
     analysis_task_time_limit_seconds: int = 60 * 30
+    analysis_running_lock_ttl_seconds: int = 60 * 35
+    analysis_rate_limit_requests: int = 300
+    analysis_rate_limit_window_seconds: int = 60
 
     @property
     def sqlalchemy_database_url(self) -> str:

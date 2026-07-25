@@ -224,6 +224,17 @@ REDIS_URL=redis://127.0.0.1:6379/0
 
 Quadlet examples for `rbi-redis` and `rbi-analysis` are in `deploy/quadlet/`. The analysis task accepts only a small JSON specification, then reads PostgreSQL itself and writes a JSON-serializable result to the Redis cache after the full analysis succeeds.
 
+The web app exposes the analysis API under `/api/analysis`:
+
+```text
+POST /api/analysis/jobs
+GET  /api/analysis/jobs/{task_id}
+GET  /api/analysis/results/{cache_key}
+GET  /api/analysis/options
+```
+
+`POST /api/analysis/jobs` checks the Redis result cache before enqueueing Celery work. If the same canonical request is already running, the API returns the existing `task_id` instead of creating a duplicate job. A loose Redis rate limit is applied only to job creation requests; the default is 300 requests per 60 seconds per client address.
+
 ## Container Image
 
 Build the v0.3.0 image locally:

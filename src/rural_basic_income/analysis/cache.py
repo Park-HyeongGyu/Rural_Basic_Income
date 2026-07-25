@@ -16,6 +16,7 @@ from rural_basic_income.analysis.specification import (
 
 ANALYSIS_VERSION = "0.3.0"
 RESULT_KEY_PREFIX = "rbi:analysis:result:"
+RUNNING_KEY_PREFIX = "rbi:analysis:running:"
 
 
 def fetch_data_revision(connection: Connection) -> str:
@@ -79,6 +80,10 @@ def result_cache_key(cache_key: str) -> str:
     return f"{RESULT_KEY_PREFIX}{cache_key}"
 
 
+def running_task_key(cache_key: str) -> str:
+    return f"{RUNNING_KEY_PREFIX}{cache_key}"
+
+
 def read_cached_result(redis_client: Any, cache_key: str) -> dict[str, Any] | None:
     raw_value = redis_client.get(result_cache_key(cache_key))
     if raw_value is None:
@@ -103,3 +108,53 @@ def write_cached_result(
         ttl_seconds,
         json.dumps(result, ensure_ascii=False, sort_keys=True),
     )
+
+
+def read_running_task_id(redis_client: Any, cache_key: str) -> str | None:
+    task_id = redis_client.get(running_task_key(cache_key))
+    if task_id is None:
+        return None
+    if isinstance(task_id, bytes):
+        return task_id.decode("utf-8")
+    return str(task_id)
+
+
+def claim_running_task(
+    redis_client: Any,
+    cache_key: str,
+    task_id: str,
+    *,
+    ttl_seconds: int,
+) -> bool:
+    claimed = redis_client.set(
+        running_task_key(cache_key),
+        task_id,
+        nx=True,
+        ex=ttl_seconds,
+    )
+    return bool(claimed)
+
+
+def clear_running_task(
+    redis_client: Any,
+    cache_key: str,
+    *,
+    task_id: str | None = None,
+) -> None:
+    key = running_task_key(cache_key)
+    if task_id is None:
+        redis_client.delete(key)
+        return
+
+    # Delete only our own lock so a late-finishing task cannot clear a newer run.
+    compare_and_delete = """
+    if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("del", KEYS[1])
+    end
+    return 0
+    """
+    try:
+        redis_client.eval(compare_and_delete, 1, key, task_id)
+    except AttributeError:
+        if read_running_task_id(redis_client, cache_key) == task_id:
+            redis_client.delete(key)

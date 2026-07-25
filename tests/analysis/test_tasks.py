@@ -7,8 +7,10 @@ import pandas as pd
 import pytest
 
 from rural_basic_income.analysis.cache import (
+    claim_running_task,
     make_analysis_cache_key,
     read_cached_result,
+    read_running_task_id,
 )
 from rural_basic_income.analysis.data_loader import LoadedAnalysisPanel
 from rural_basic_income.analysis.panel import AnalysisPanel
@@ -56,6 +58,22 @@ class DictRedis:
     def setex(self, key: str, ttl: int, value: str) -> None:
         self.values[key] = value
         self.set_count += 1
+
+    def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None):
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        return True
+
+    def delete(self, key: str) -> int:
+        existed = key in self.values
+        self.values.pop(key, None)
+        return int(existed)
+
+    def eval(self, script: str, numkeys: int, key: str, task_id: str) -> int:
+        if self.values.get(key) == task_id:
+            return self.delete(key)
+        return 0
 
 
 @dataclass(frozen=True)
@@ -184,6 +202,27 @@ def test_run_analysis_job_writes_success_cache() -> None:
     assert read_cached_result(redis_client, result["cache_key"]) == result["result"]
 
 
+def test_run_analysis_job_clears_running_lock_after_success() -> None:
+    redis_client = DictRedis()
+    payload = make_payload()
+    data_revision = "metadata.download_status:2:2026-07-25 00:00:00+00"
+    cache_key = make_analysis_cache_key(payload, data_revision=data_revision)
+    claim_running_task(redis_client, cache_key, "task-1", ttl_seconds=60)
+
+    run_analysis_job(
+        payload,
+        connection=FakeConnection(),
+        redis_client=redis_client,
+        settings=SettingsStub(),
+        panel_loader=lambda _connection, _outcome, _spec: make_loaded_panel(),
+        twfe_runner=lambda _panel: make_twfe_result(),
+        event_study_runner=lambda _panel: make_event_study_result(),
+        running_task_id="task-1",
+    )
+
+    assert read_running_task_id(redis_client, cache_key) is None
+
+
 def test_run_analysis_job_returns_cache_hit_without_loading_panel() -> None:
     redis_client = DictRedis()
     payload = make_payload()
@@ -220,6 +259,7 @@ def test_force_rerun_ignores_cache_but_preserves_old_cache_on_failure() -> None:
         60,
         '{"old_success": true}',
     )
+    claim_running_task(redis_client, cache_key, "task-1", ttl_seconds=60)
 
     def fail_loader(*args, **kwargs):
         raise RuntimeError("analysis failed")
@@ -231,6 +271,8 @@ def test_force_rerun_ignores_cache_but_preserves_old_cache_on_failure() -> None:
             redis_client=redis_client,
             settings=SettingsStub(),
             panel_loader=fail_loader,
+            running_task_id="task-1",
         )
 
     assert read_cached_result(redis_client, cache_key) == {"old_success": True}
+    assert read_running_task_id(redis_client, cache_key) is None
