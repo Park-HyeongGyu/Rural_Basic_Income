@@ -7,13 +7,14 @@ name = "rural-basic-income"
 version = "0.3.0"
 description = "Research web platform for rural basic income data."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastapi>=0.115",
     "jinja2>=3.1",
     "openpyxl>=3.1",
     "pandas>=3.0",
     "psycopg[binary]>=3.2",
+    "pyfixest>=0.60,<0.61",
     "pydantic-settings>=2.6",
     "sqlalchemy>=2.0",
     "uvicorn[standard]>=0.30",

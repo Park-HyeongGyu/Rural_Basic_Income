@@ -2,7 +2,7 @@
 
 농어촌기본소득 연구용 자체 호스팅 웹 프로젝트입니다.
 
-현재 `v0.3.0` 개발 브랜치는 `v0.2.0`에서 완성한 수동 데이터 갱신 흐름을 `rbi` CLI와 host systemd timer 구조로 정리하고 있습니다.
+현재 `v0.3.0` 개발 브랜치는 `v0.2.0`에서 완성한 수동 데이터 갱신 흐름을 `rbi` CLI와 host systemd timer 구조로 정리하고, PyFixest 기반 TWFE 분석 foundation을 추가하고 있습니다.
 
 ## Branch Workflow
 
@@ -45,6 +45,7 @@ v0.3.0에서 구현 중인 방향:
 - update-level advisory lock
 - host user systemd timer가 `podman exec rbi-web rbi update --latest` 실행
 - scheduled updater container 제거
+- PyFixest 기반 traditional TWFE DiD 및 event-study core
 
 v0.3.0에서 현재 제외하는 기능:
 
@@ -70,6 +71,7 @@ v0.3.0에서 현재 제외하는 기능:
 │   └── clean/
 ├── src/
 │   └── rural_basic_income/
+│       ├── analysis/
 │       ├── db/
 │       ├── worker/
 │       └── web/
@@ -80,6 +82,8 @@ v0.3.0에서 현재 제외하는 기능:
 `src/rural_basic_income/worker/`가 데이터 다운로드, raw 적재, clean SQL 실행을 담당합니다.
 
 ## Local Development
+
+The application image uses Python 3.13. Use Python 3.11, 3.12, or 3.13 for local development. Python 3.14 can currently fail to install PyFixest's table-rendering dependency chain on some systems.
 
 Install the project with development dependencies:
 
