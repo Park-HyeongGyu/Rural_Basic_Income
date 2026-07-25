@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     kosis_api_key: str | None = None
     kepco_api_key: str | None = None
     data_go_kr_api_key: str | None = None
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    celery_broker_url: str | None = None
+    celery_result_backend: str | None = None
+    analysis_cache_ttl_seconds: int = 60 * 60 * 24 * 30
+    analysis_task_soft_time_limit_seconds: int = 60 * 20
+    analysis_task_time_limit_seconds: int = 60 * 30
 
     @property
     def sqlalchemy_database_url(self) -> str:
@@ -34,6 +40,14 @@ class Settings(BaseSettings):
         port = self.postgres_port
         db = quote(self.postgres_db, safe="")
         return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}"
+
+    @property
+    def resolved_celery_broker_url(self) -> str:
+        return self.celery_broker_url or self.redis_url
+
+    @property
+    def resolved_celery_result_backend(self) -> str:
+        return self.celery_result_backend or self.redis_url
 
 
 @lru_cache

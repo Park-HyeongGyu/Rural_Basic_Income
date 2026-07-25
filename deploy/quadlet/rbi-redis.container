@@ -1,0 +1,21 @@
+[Unit]
+Description=Rural Basic Income Redis broker
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=rbi-redis
+Image=docker.io/library/redis:7-alpine
+Pod=rbi-pod.pod
+Exec=redis-server --appendonly no --save ""
+HealthCmd=redis-cli ping
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=always
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

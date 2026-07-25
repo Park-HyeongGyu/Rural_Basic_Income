@@ -47,6 +47,7 @@ v0.3.0에서 구현 중인 방향:
 - scheduled updater container 제거
 - PyFixest 기반 traditional TWFE DiD 및 event-study core
 - clean table에서 선택 region, period, filter만 읽는 analysis data loader
+- Redis/Celery 기반 analysis task queue scaffold
 
 v0.3.0에서 현재 제외하는 기능:
 
@@ -207,6 +208,22 @@ Inspect source download status:
 
 The worker writes raw payload chunks to `raw_json.payloads`, raw rows to `raw.*`, source-period metadata to `metadata.download_status`, and clean tables to `clean.*`. In `metadata.download_status`, `status = 1` means the source-period was written successfully and `status = 2` means the source returned no usable data or a non-standard response and will be retried on a later run.
 
+## Analysis Queue
+
+The analysis worker uses the same image as the web container and runs Celery:
+
+```bash
+celery -A rural_basic_income.analysis.celery_app:app worker --loglevel=INFO --concurrency=1 --prefetch-multiplier=1
+```
+
+Redis is used as the Celery broker, result backend, and analysis result cache. The default local URL is:
+
+```text
+REDIS_URL=redis://127.0.0.1:6379/0
+```
+
+Quadlet examples for `rbi-redis` and `rbi-analysis` are in `deploy/quadlet/`. The analysis task accepts only a small JSON specification, then reads PostgreSQL itself and writes a JSON-serializable result to the Redis cache after the full analysis succeeds.
+
 ## Container Image
 
 Build the v0.3.0 image locally:
@@ -231,18 +248,25 @@ podman save localhost/rural-basic-income:0.3.0 | ssh user@server 'podman load'
 
 ## Quadlet Deployment
 
-The deployment assumes the PostgreSQL volume already exists on the server. Install the pod, database, and web Quadlet files:
+The deployment assumes the PostgreSQL volume already exists on the server. Install the pod, database, web, Redis, and analysis worker Quadlet files:
 
 ```bash
 mkdir -p ~/.config/containers/systemd
-cp deploy/quadlet/rbi-pod.pod deploy/quadlet/rbi-postgres.container deploy/quadlet/rbi-web.container ~/.config/containers/systemd/
+cp deploy/quadlet/rbi-pod.pod \
+  deploy/quadlet/rbi-postgres.container \
+  deploy/quadlet/rbi-web.container \
+  deploy/quadlet/rbi-redis.container \
+  deploy/quadlet/rbi-analysis.container \
+  ~/.config/containers/systemd/
 systemctl --user daemon-reload
 systemctl --user start rbi-pod.service
 systemctl --user start rbi-postgres.service
+systemctl --user start rbi-redis.service
 systemctl --user start rbi-web.service
+systemctl --user start rbi-analysis.service
 ```
 
-`rbi-pod.pod` publishes the web service on `127.0.0.1:8000` and PostgreSQL on `127.0.0.1:5432`. The web and database containers share the pod network namespace, so the existing local `127.0.0.1` database settings work inside the deployment pod.
+`rbi-pod.pod` publishes the web service on `127.0.0.1:8000` and PostgreSQL on `127.0.0.1:5432`. Redis is kept inside the shared pod network and is not published to the host by default. The web, database, Redis, and analysis containers share the pod network namespace, so the existing local `127.0.0.1` service settings work inside the deployment pod.
 
 Check the running web service:
 
