@@ -233,22 +233,37 @@ def cleanup_stale_export_dirs(parent_dir: Path, target_name: str) -> None:
             shutil.rmtree(path, ignore_errors=True)
 
 
+def create_export_temp_dir(target_dir: Path) -> Path:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    cleanup_stale_export_dirs(target_dir, "tmp")
+    temp_dir = target_dir / f".tmp.{uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=False)
+    return temp_dir
+
+
+def remove_export_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+        return
+    path.unlink()
+
+
 def publish_export_directory(temp_dir: Path, target_dir: Path) -> Path:
-    target_dir.parent.mkdir(parents=True, exist_ok=True)
-    backup_dir = target_dir.parent / f".{target_dir.name}.old-{uuid4().hex}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if not temp_dir.exists():
+        raise ExportError(f"export temp directory does not exist: {temp_dir}")
+    if temp_dir.resolve() == target_dir.resolve():
+        raise ExportError("export temp directory must differ from target directory")
 
-    if target_dir.exists():
-        target_dir.rename(backup_dir)
+    for path in tuple(target_dir.iterdir()):
+        if path == temp_dir:
+            continue
+        remove_export_path(path)
 
-    try:
-        temp_dir.rename(target_dir)
-    except Exception:
-        if backup_dir.exists() and not target_dir.exists():
-            backup_dir.rename(target_dir)
-        raise
+    for path in tuple(temp_dir.iterdir()):
+        shutil.move(str(path), str(target_dir / path.name))
 
-    if backup_dir.exists():
-        shutil.rmtree(backup_dir)
+    shutil.rmtree(temp_dir, ignore_errors=True)
     return target_dir
 
 
@@ -271,9 +286,8 @@ def export_csv(
 ) -> ExportResult:
     db_engine = engine or get_engine()
     target_dir = resolve_export_csv_dir(export_csv_dir)
-    temp_dir = target_dir.parent / f".{target_dir.name}.tmp-{uuid4().hex}"
     cleanup_stale_export_dirs(target_dir.parent, target_dir.name)
-    temp_dir.mkdir(parents=True, exist_ok=False)
+    temp_dir = create_export_temp_dir(target_dir)
 
     try:
         with db_engine.connect() as connection:
@@ -317,9 +331,8 @@ def export_dta(
 ) -> ExportResult:
     db_engine = engine or get_engine()
     target_dir = resolve_export_dta_dir(export_dta_dir)
-    temp_dir = target_dir.parent / f".{target_dir.name}.tmp-{uuid4().hex}"
     cleanup_stale_export_dirs(target_dir.parent, target_dir.name)
-    temp_dir.mkdir(parents=True, exist_ok=False)
+    temp_dir = create_export_temp_dir(target_dir)
 
     try:
         with db_engine.connect() as connection:
@@ -365,13 +378,11 @@ def export_all(
     db_engine = engine or get_engine()
     csv_target_dir = resolve_export_csv_dir(export_csv_dir)
     dta_target_dir = resolve_export_dta_dir(export_dta_dir)
-    csv_temp_dir = csv_target_dir.parent / f".{csv_target_dir.name}.tmp-{uuid4().hex}"
-    dta_temp_dir = dta_target_dir.parent / f".{dta_target_dir.name}.tmp-{uuid4().hex}"
 
     cleanup_stale_export_dirs(csv_target_dir.parent, csv_target_dir.name)
     cleanup_stale_export_dirs(dta_target_dir.parent, dta_target_dir.name)
-    csv_temp_dir.mkdir(parents=True, exist_ok=False)
-    dta_temp_dir.mkdir(parents=True, exist_ok=False)
+    csv_temp_dir = create_export_temp_dir(csv_target_dir)
+    dta_temp_dir = create_export_temp_dir(dta_target_dir)
 
     try:
         with db_engine.connect() as connection:

@@ -211,8 +211,16 @@ def test_run_update_exports_when_raw_was_written() -> None:
     assert "clean.clean_population: clean_population.dta rows=1" in output.getvalue()
 
 
-def test_run_update_skips_export_when_nothing_was_written() -> None:
+def test_run_update_skips_export_when_nothing_was_written_and_exports_exist(
+    tmp_path: Path,
+) -> None:
     output = io.StringIO()
+    csv_dir = tmp_path / "csv"
+    dta_dir = tmp_path / "dta"
+    csv_dir.mkdir()
+    dta_dir.mkdir()
+    (csv_dir / "clean_population.csv").write_text("date,population\n", encoding="utf-8")
+    (dta_dir / "clean_population.dta").write_bytes(b"dta")
 
     def raw_runner(*args, **kwargs):
         return (
@@ -234,13 +242,112 @@ def test_run_update_skips_export_when_nothing_was_written() -> None:
         raw_runner=raw_runner,
         clean_runner=lambda *args, **kwargs: (),
         export_requested=True,
+        export_csv_dir=str(csv_dir),
+        export_dta_dir=str(dta_dir),
         export_runner=fail_export_runner,
         output=output,
         lock_update=False,
     )
 
     assert result.export_result is None
-    assert "skipped: no raw writes or clean rebuild" in output.getvalue()
+    assert "skipped: no data changes and export files exist" in output.getvalue()
+
+
+def test_run_update_exports_when_export_files_are_missing(tmp_path: Path) -> None:
+    calls: list[str] = []
+    output = io.StringIO()
+    csv_dir = tmp_path / "csv"
+    dta_dir = tmp_path / "dta"
+    csv_dir.mkdir()
+    dta_dir.mkdir()
+
+    def raw_runner(*args, **kwargs):
+        return (
+            raw_orchestrator.RawRefreshResult(
+                source_name="population",
+                period="202601",
+                status="skipped_existing",
+                row_count=10,
+            ),
+        )
+
+    def export_runner(**kwargs):
+        calls.append("export")
+        assert kwargs["export_csv_dir"] == str(csv_dir)
+        assert kwargs["export_dta_dir"] == str(dta_dir)
+        return make_export_result(str(tmp_path))
+
+    result = cli.run_update(
+        start_period="202601",
+        end_period="202601",
+        engine=object(),
+        raw_runner=raw_runner,
+        clean_runner=lambda *args, **kwargs: (),
+        export_requested=True,
+        export_csv_dir=str(csv_dir),
+        export_dta_dir=str(dta_dir),
+        export_runner=export_runner,
+        output=output,
+        lock_update=False,
+    )
+
+    assert calls == ["export"]
+    assert result.export_result is not None
+    assert f"csv: {csv_dir}" in output.getvalue()
+
+
+def test_run_update_exports_when_clean_changed(tmp_path: Path) -> None:
+    calls: list[str] = []
+    output = io.StringIO()
+    csv_dir = tmp_path / "csv"
+    dta_dir = tmp_path / "dta"
+    csv_dir.mkdir()
+    dta_dir.mkdir()
+    (csv_dir / "clean_population.csv").write_text("date,population\n", encoding="utf-8")
+    (dta_dir / "clean_population.dta").write_bytes(b"dta")
+
+    def raw_runner(*args, **kwargs):
+        return (
+            raw_orchestrator.RawRefreshResult(
+                source_name="population",
+                period="202601",
+                status="skipped_existing",
+                row_count=10,
+            ),
+        )
+
+    def clean_runner(*args, **kwargs):
+        return (
+            clean_orchestrator.CleanDatasetResult(
+                dataset_name="population",
+                sql_file=Path("clean_population.sql"),
+                statement_count=16,
+                affected_row_count=3,
+                revision=2,
+                revision_changed=True,
+            ),
+        )
+
+    def export_runner(**kwargs):
+        calls.append("export")
+        return make_export_result(str(tmp_path))
+
+    result = cli.run_update(
+        start_period="202601",
+        end_period="202601",
+        engine=object(),
+        raw_runner=raw_runner,
+        clean_runner=clean_runner,
+        export_requested=True,
+        export_csv_dir=str(csv_dir),
+        export_dta_dir=str(dta_dir),
+        export_runner=export_runner,
+        output=output,
+        lock_update=False,
+    )
+
+    assert calls == ["export"]
+    assert result.export_result is not None
 
 
 def test_run_update_latest_uses_configured_default_start_period(

@@ -131,6 +131,23 @@ def test_export_csv_writes_flat_latest_raw_and_clean_files(tmp_path: Path) -> No
     assert not any(path.is_dir() for path in target_dir.iterdir())
 
 
+def test_publish_export_directory_keeps_target_directory_in_place(tmp_path: Path) -> None:
+    target_dir = tmp_path / "csv"
+    target_dir.mkdir()
+    target_inode = target_dir.stat().st_ino
+    (target_dir / "stale.csv").write_text("old", encoding="utf-8")
+    temp_dir = target_dir / ".tmp.test"
+    temp_dir.mkdir()
+    (temp_dir / "fresh.csv").write_text("new", encoding="utf-8")
+
+    result = export.publish_export_directory(temp_dir, target_dir)
+
+    assert result == target_dir
+    assert target_dir.stat().st_ino == target_inode
+    assert sorted(path.name for path in target_dir.iterdir()) == ["fresh.csv"]
+    assert (target_dir / "fresh.csv").read_text(encoding="utf-8") == "new"
+
+
 def test_csv_file_name_avoids_double_clean_prefix() -> None:
     assert export.csv_file_name("raw", "population") == "raw_population.csv"
     assert export.csv_file_name("clean", "clean_population") == "clean_population.csv"

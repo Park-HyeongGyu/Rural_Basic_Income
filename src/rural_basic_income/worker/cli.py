@@ -5,6 +5,7 @@ import logging
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TextIO
 
 from sqlalchemy import text
@@ -109,7 +110,7 @@ def print_export_results(
 ) -> None:
     print("export:", file=output)
     if result is None:
-        print("  skipped: no raw writes or clean rebuild", file=output)
+        print("  skipped: no data changes and export files exist", file=output)
         return
 
     for format_name, format_result in (
@@ -129,6 +130,51 @@ def raw_results_have_writes(
     results: Sequence[raw_orchestrator.RawRefreshResult],
 ) -> bool:
     return any(result.status == "downloaded_written" for result in results)
+
+
+def clean_results_have_changes(
+    results: Sequence[clean_orchestrator.CleanDatasetResult],
+) -> bool:
+    return any(
+        result.affected_row_count > 0 or result.revision_changed
+        for result in results
+    )
+
+
+def export_dir_has_files(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    return any(
+        child.is_file() and not child.name.startswith(".")
+        for child in path.iterdir()
+    )
+
+
+def export_outputs_missing(
+    *,
+    export_csv_dir: str | None = None,
+    export_dta_dir: str | None = None,
+) -> bool:
+    csv_dir = csv_export.resolve_export_csv_dir(export_csv_dir)
+    dta_dir = csv_export.resolve_export_dta_dir(export_dta_dir)
+    return not export_dir_has_files(csv_dir) or not export_dir_has_files(dta_dir)
+
+
+def should_run_export(
+    *,
+    raw_results: Sequence[raw_orchestrator.RawRefreshResult] = (),
+    clean_results: Sequence[clean_orchestrator.CleanDatasetResult] = (),
+    export_csv_dir: str | None = None,
+    export_dta_dir: str | None = None,
+) -> bool:
+    return (
+        raw_results_have_writes(raw_results)
+        or clean_results_have_changes(clean_results)
+        or export_outputs_missing(
+            export_csv_dir=export_csv_dir,
+            export_dta_dir=export_dta_dir,
+        )
+    )
 
 
 def scalar_bool(result) -> bool:
@@ -213,7 +259,12 @@ def run_update(
         print_clean_results(clean_results, output=output)
         export_result = None
         if export_requested:
-            if raw_results_have_writes(raw_results):
+            if should_run_export(
+                raw_results=raw_results,
+                clean_results=clean_results,
+                export_csv_dir=export_csv_dir,
+                export_dta_dir=export_dta_dir,
+            ):
                 export_result = export_runner(
                     export_csv_dir=export_csv_dir,
                     export_dta_dir=export_dta_dir,
@@ -291,7 +342,12 @@ def run_update_latest(
         print_clean_results(clean_results, output=output)
         export_result = None
         if export_requested:
-            if raw_results_have_writes(raw_results):
+            if should_run_export(
+                raw_results=raw_results,
+                clean_results=clean_results,
+                export_csv_dir=export_csv_dir,
+                export_dta_dir=export_dta_dir,
+            ):
                 export_result = export_runner(
                     export_csv_dir=export_csv_dir,
                     export_dta_dir=export_dta_dir,
@@ -341,7 +397,11 @@ def run_clean(
     print_clean_results(clean_results, output=output)
     if export_requested:
         export_result = None
-        if rebuild:
+        if rebuild or should_run_export(
+            clean_results=clean_results,
+            export_csv_dir=export_csv_dir,
+            export_dta_dir=export_dta_dir,
+        ):
             export_result = export_runner(
                 export_csv_dir=export_csv_dir,
                 export_dta_dir=export_dta_dir,
