@@ -10,7 +10,7 @@ from typing import TextIO
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from rural_basic_income.db.connection import get_engine
+from rural_basic_income.db.connection import dispose_engine, get_engine
 from rural_basic_income.worker import clean_orchestrator
 from rural_basic_income.worker import export as csv_export
 from rural_basic_income.worker import raw_orchestrator
@@ -18,7 +18,7 @@ from rural_basic_income.worker import raw_orchestrator
 RawRangeRunner = Callable[..., tuple[raw_orchestrator.RawRefreshResult, ...]]
 RawLatestRunner = Callable[..., tuple[raw_orchestrator.RawRefreshResult, ...]]
 CleanRunner = Callable[..., tuple[clean_orchestrator.CleanDatasetResult, ...]]
-ExportRunner = Callable[..., csv_export.ExportResult]
+ExportRunner = Callable[..., csv_export.ExportRunResult]
 LOGGER = logging.getLogger(__name__)
 UPDATE_LOCK_KEY = "rural_basic_income.update"
 
@@ -31,7 +31,7 @@ class WorkerCliError(RuntimeError):
 class WorkerUpdateResult:
     raw_results: tuple[raw_orchestrator.RawRefreshResult, ...]
     clean_results: tuple[clean_orchestrator.CleanDatasetResult, ...]
-    export_result: csv_export.ExportResult | None = None
+    export_result: csv_export.ExportRunResult | None = None
 
 
 @dataclass(frozen=True)
@@ -100,7 +100,7 @@ def print_clean_results(
 
 
 def print_export_results(
-    result: csv_export.ExportResult | None,
+    result: csv_export.ExportRunResult | None,
     *,
     output: TextIO,
 ) -> None:
@@ -109,13 +109,17 @@ def print_export_results(
         print("  skipped: no raw writes or clean rebuild", file=output)
         return
 
-    print(f"  dir: {result.export_dir}", file=output)
-    for table in result.tables:
-        print(
-            f"  {table.schema_name}.{table.table_name}: "
-            f"{table.file_path.name} rows={table.row_count}",
-            file=output,
-        )
+    for format_name, format_result in (
+        ("csv", result.csv),
+        ("dta", result.dta),
+    ):
+        print(f"  {format_name}: {format_result.export_dir}", file=output)
+        for table in format_result.tables:
+            print(
+                f"    {table.schema_name}.{table.table_name}: "
+                f"{table.file_path.name} rows={table.row_count}",
+                file=output,
+            )
 
 
 def raw_results_have_writes(
@@ -169,7 +173,8 @@ def run_update(
     clean_runner: CleanRunner = clean_orchestrator.run_clean_datasets,
     export_requested: bool = False,
     export_csv_dir: str | None = None,
-    export_runner: ExportRunner = csv_export.export_csv,
+    export_dta_dir: str | None = None,
+    export_runner: ExportRunner = csv_export.export_all,
     output: TextIO = sys.stdout,
     lock_update: bool = True,
 ) -> WorkerUpdateResult:
@@ -208,6 +213,7 @@ def run_update(
             if raw_results_have_writes(raw_results):
                 export_result = export_runner(
                     export_csv_dir=export_csv_dir,
+                    export_dta_dir=export_dta_dir,
                     engine=db_engine,
                 )
             print_export_results(export_result, output=output)
@@ -242,7 +248,8 @@ def run_update_latest(
     clean_runner: CleanRunner = clean_orchestrator.run_clean_datasets,
     export_requested: bool = False,
     export_csv_dir: str | None = None,
-    export_runner: ExportRunner = csv_export.export_csv,
+    export_dta_dir: str | None = None,
+    export_runner: ExportRunner = csv_export.export_all,
     output: TextIO = sys.stdout,
     lock_update: bool = True,
 ) -> WorkerUpdateResult:
@@ -283,6 +290,7 @@ def run_update_latest(
             if raw_results_have_writes(raw_results):
                 export_result = export_runner(
                     export_csv_dir=export_csv_dir,
+                    export_dta_dir=export_dta_dir,
                     engine=db_engine,
                 )
             print_export_results(export_result, output=output)
@@ -314,7 +322,8 @@ def run_clean(
     clean_runner: CleanRunner = clean_orchestrator.run_clean_datasets,
     export_requested: bool = False,
     export_csv_dir: str | None = None,
-    export_runner: ExportRunner = csv_export.export_csv,
+    export_dta_dir: str | None = None,
+    export_runner: ExportRunner = csv_export.export_all,
     output: TextIO = sys.stdout,
 ) -> tuple[clean_orchestrator.CleanDatasetResult, ...]:
     db_engine = engine or get_engine()
@@ -331,6 +340,7 @@ def run_clean(
         if rebuild:
             export_result = export_runner(
                 export_csv_dir=export_csv_dir,
+                export_dta_dir=export_dta_dir,
                 engine=db_engine,
             )
         print_export_results(export_result, output=output)
@@ -340,13 +350,15 @@ def run_clean(
 def run_export(
     *,
     export_csv_dir: str | None = None,
+    export_dta_dir: str | None = None,
     engine: Engine | None = None,
-    export_runner: ExportRunner = csv_export.export_csv,
+    export_runner: ExportRunner = csv_export.export_all,
     output: TextIO = sys.stdout,
-) -> csv_export.ExportResult:
+) -> csv_export.ExportRunResult:
     db_engine = engine or get_engine()
     export_result = export_runner(
         export_csv_dir=export_csv_dir,
+        export_dta_dir=export_dta_dir,
         engine=db_engine,
     )
     print_export_results(export_result, output=output)
@@ -392,6 +404,7 @@ def run_update_command(args: argparse.Namespace) -> int:
             force_raw=args.force_raw,
             export_requested=args.export,
             export_csv_dir=args.export_csv_dir,
+            export_dta_dir=args.export_dta_dir,
         )
     else:
         if not args.start_period or not args.end_period:
@@ -406,6 +419,7 @@ def run_update_command(args: argparse.Namespace) -> int:
             force_raw=args.force_raw,
             export_requested=args.export,
             export_csv_dir=args.export_csv_dir,
+            export_dta_dir=args.export_dta_dir,
         )
     return 0
 
@@ -419,6 +433,7 @@ def run_clean_command(args: argparse.Namespace) -> int:
         end_period=args.end_period,
         export_requested=args.export,
         export_csv_dir=args.export_csv_dir,
+        export_dta_dir=args.export_dta_dir,
     )
     return 0
 
@@ -430,7 +445,10 @@ def run_status_command(args: argparse.Namespace) -> int:
 
 
 def run_export_command(args: argparse.Namespace) -> int:
-    run_export(export_csv_dir=args.export_csv_dir)
+    run_export(
+        export_csv_dir=args.export_csv_dir,
+        export_dta_dir=args.export_dta_dir,
+    )
     return 0
 
 
@@ -508,13 +526,17 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
         "--export",
         action="store_true",
         help=(
-            "export raw and clean CSV files after the update only when raw "
-            "data was written"
+            "export raw and clean CSV and DTA files after the update only "
+            "when raw data was written"
         ),
     )
     update_parser.add_argument(
         "--export-csv-dir",
         help="directory for flat raw_*.csv and clean_*.csv files",
+    )
+    update_parser.add_argument(
+        "--export-dta-dir",
+        help="directory for flat raw_*.dta and clean_*.dta files",
     )
     update_parser.add_argument(
         "--log-level",
@@ -560,11 +582,15 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
     clean_parser.add_argument(
         "--export",
         action="store_true",
-        help="export raw and clean CSV files after an explicit clean rebuild",
+        help="export raw and clean CSV and DTA files after an explicit clean rebuild",
     )
     clean_parser.add_argument(
         "--export-csv-dir",
         help="directory for flat raw_*.csv and clean_*.csv files",
+    )
+    clean_parser.add_argument(
+        "--export-dta-dir",
+        help="directory for flat raw_*.dta and clean_*.dta files",
     )
     clean_parser.set_defaults(func=run_clean_command)
 
@@ -590,11 +616,15 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
 
     export_parser = subparsers.add_parser(
         "export",
-        help="export current raw and clean tables to flat CSV files",
+        help="export current raw and clean tables to flat CSV and DTA files",
     )
     export_parser.add_argument(
         "--export-csv-dir",
         help="directory for flat raw_*.csv and clean_*.csv files",
+    )
+    export_parser.add_argument(
+        "--export-dta-dir",
+        help="directory for flat raw_*.dta and clean_*.dta files",
     )
     export_parser.add_argument(
         "--log-level",
@@ -620,6 +650,8 @@ def main(argv: Sequence[str] | None = None, *, prog: str = "rbi") -> int:
         csv_export.ExportError,
     ) as exc:
         parser.exit(2, f"rbi: error: {exc}\n")
+    finally:
+        dispose_engine()
     return 0
 
 

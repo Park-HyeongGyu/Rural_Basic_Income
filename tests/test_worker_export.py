@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from rural_basic_income.worker import export
@@ -113,7 +114,15 @@ def test_export_csv_writes_flat_latest_raw_and_clean_files(tmp_path: Path) -> No
     assert read_csv(target_dir / "raw_population.csv") == [
         ["시점", "행정구역", "값"],
         ["202601", "전북 임실군", "10"],
-        ["202601", "전북 고창군", json.dumps({"nested": ["값"]}, ensure_ascii=False, separators=(",", ":"))],
+        [
+            "202601",
+            "전북 고창군",
+            json.dumps(
+                {"nested": ["값"]},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        ],
     ]
     assert read_csv(target_dir / "clean_population.csv") == [
         ["date", "region_sido", "region_sigungu", "population"],
@@ -126,6 +135,44 @@ def test_csv_file_name_avoids_double_clean_prefix() -> None:
     assert export.csv_file_name("raw", "population") == "raw_population.csv"
     assert export.csv_file_name("clean", "clean_population") == "clean_population.csv"
     assert export.csv_file_name("clean", "electricity") == "clean_electricity.csv"
+    assert export.dta_file_name("raw", "population") == "raw_population.dta"
+    assert export.dta_file_name("clean", "clean_population") == "clean_population.dta"
+
+
+def test_export_table_to_dta_keeps_unicode_variable_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_read_sql_query(sql: str, connection) -> pd.DataFrame:
+        assert sql == 'SELECT * FROM "raw"."household"'
+        return pd.DataFrame(
+            {
+                "시점": [202601],
+                "행정구역(시군구)별": ["전북 임실군"],
+                "세대수 (세대)": [123],
+                "downloaded_at": pd.to_datetime(
+                    ["2026-07-26T00:00:00+00:00"],
+                    utc=True,
+                ),
+            }
+        )
+
+    monkeypatch.setattr(export.pd, "read_sql_query", fake_read_sql_query)
+
+    result = export.export_table_to_dta(
+        object(),
+        export.ExportTable("raw", "household"),
+        output_dir=tmp_path,
+    )
+
+    assert result.file_path == tmp_path / "raw_household.dta"
+    assert result.row_count == 1
+    dataframe = pd.read_stata(result.file_path)
+    assert "시점" in dataframe.columns
+    assert "행정구역_시군구_별" in dataframe.columns
+    assert "세대수__세대_" in dataframe.columns
+    assert dataframe.loc[0, "행정구역_시군구_별"] == "전북 임실군"
+    assert dataframe.loc[0, "downloaded_at"].startswith("2026-07-26T")
 
 
 def test_list_export_tables_rejects_unknown_schema() -> None:

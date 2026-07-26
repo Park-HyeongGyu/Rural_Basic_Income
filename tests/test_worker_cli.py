@@ -51,6 +51,33 @@ class LockingEngine:
         return LockingConnectionContext(self.connection)
 
 
+def make_export_result(base_dir: str = "/tmp/rbi-export") -> csv_export.ExportRunResult:
+    return csv_export.ExportRunResult(
+        csv=csv_export.ExportResult(
+            export_dir=Path(base_dir) / "csv",
+            tables=(
+                csv_export.ExportTableResult(
+                    schema_name="clean",
+                    table_name="clean_population",
+                    file_path=Path(base_dir) / "csv" / "clean_population.csv",
+                    row_count=1,
+                ),
+            ),
+        ),
+        dta=csv_export.ExportResult(
+            export_dir=Path(base_dir) / "dta",
+            tables=(
+                csv_export.ExportTableResult(
+                    schema_name="clean",
+                    table_name="clean_population",
+                    file_path=Path(base_dir) / "dta" / "clean_population.dta",
+                    row_count=1,
+                ),
+            ),
+        ),
+    )
+
+
 def test_split_option_values_accepts_commas_and_repeated_values() -> None:
     assert cli.split_option_values(
         ("population,mover", " electricity ", "local_currency,"),
@@ -148,18 +175,15 @@ def test_run_update_exports_when_raw_was_written() -> None:
         return ()
 
     def export_runner(**kwargs):
-        calls.append(("export", kwargs["engine"], kwargs["export_csv_dir"]))
-        return csv_export.ExportResult(
-            export_dir=Path("/tmp/rbi-export"),
-            tables=(
-                csv_export.ExportTableResult(
-                    schema_name="clean",
-                    table_name="clean_population",
-                    file_path=Path("/tmp/rbi-export/clean_population.csv"),
-                    row_count=1,
-                ),
-            ),
+        calls.append(
+            (
+                "export",
+                kwargs["engine"],
+                kwargs["export_csv_dir"],
+                kwargs["export_dta_dir"],
+            )
         )
+        return make_export_result()
 
     result = cli.run_update(
         start_period="202601",
@@ -169,6 +193,7 @@ def test_run_update_exports_when_raw_was_written() -> None:
         clean_runner=clean_runner,
         export_requested=True,
         export_csv_dir="/tmp/rbi-export",
+        export_dta_dir="/tmp/rbi-export-dta",
         export_runner=export_runner,
         output=output,
         lock_update=False,
@@ -177,10 +202,13 @@ def test_run_update_exports_when_raw_was_written() -> None:
     assert calls == [
         ("raw", engine),
         ("clean", engine),
-        ("export", engine, "/tmp/rbi-export"),
+        ("export", engine, "/tmp/rbi-export", "/tmp/rbi-export-dta"),
     ]
     assert result.export_result is not None
+    assert "csv: /tmp/rbi-export/csv" in output.getvalue()
+    assert "dta: /tmp/rbi-export/dta" in output.getvalue()
     assert "clean.clean_population: clean_population.csv rows=1" in output.getvalue()
+    assert "clean.clean_population: clean_population.dta rows=1" in output.getvalue()
 
 
 def test_run_update_skips_export_when_nothing_was_written() -> None:
@@ -288,6 +316,8 @@ def test_update_command_parses_sources_and_datasets(
             "--export",
             "--export-csv-dir",
             "/tmp/rbi-export",
+            "--export-dta-dir",
+            "/tmp/rbi-export-dta",
         )
     )
 
@@ -301,6 +331,7 @@ def test_update_command_parses_sources_and_datasets(
             "force_raw": True,
             "export_requested": True,
             "export_csv_dir": "/tmp/rbi-export",
+            "export_dta_dir": "/tmp/rbi-export-dta",
         }
     ]
 
@@ -335,6 +366,7 @@ def test_update_command_uses_default_sources_and_datasets(
             "force_raw": False,
             "export_requested": False,
             "export_csv_dir": None,
+            "export_dta_dir": None,
         }
     ]
 
@@ -400,6 +432,7 @@ def test_update_latest_command_calls_latest_runner(
             "force_raw": False,
             "export_requested": False,
             "export_csv_dir": None,
+            "export_dta_dir": None,
         }
     ]
 
@@ -434,6 +467,8 @@ def test_clean_command_parses_rebuild_periods(
             "--export",
             "--export-csv-dir",
             "/tmp/rbi-export",
+            "--export-dta-dir",
+            "/tmp/rbi-export-dta",
         )
     )
 
@@ -446,6 +481,7 @@ def test_clean_command_parses_rebuild_periods(
             "end_period": "202602",
             "export_requested": True,
             "export_csv_dir": "/tmp/rbi-export",
+            "export_dta_dir": "/tmp/rbi-export-dta",
         }
     ]
 
@@ -457,13 +493,26 @@ def test_export_command_runs_current_db_export(
 
     def fake_run_export(**kwargs):
         calls.append(kwargs)
-        return csv_export.ExportResult(export_dir=Path("/tmp/rbi-export"), tables=())
+        return make_export_result()
 
     monkeypatch.setattr(cli, "run_export", fake_run_export)
-    exit_code = cli.main(("export", "--export-csv-dir", "/tmp/rbi-export"))
+    exit_code = cli.main(
+        (
+            "export",
+            "--export-csv-dir",
+            "/tmp/rbi-export",
+            "--export-dta-dir",
+            "/tmp/rbi-export-dta",
+        )
+    )
 
     assert exit_code == 0
-    assert calls == [{"export_csv_dir": "/tmp/rbi-export"}]
+    assert calls == [
+        {
+            "export_csv_dir": "/tmp/rbi-export",
+            "export_dta_dir": "/tmp/rbi-export-dta",
+        }
+    ]
 
 
 def test_status_command_parses_sources(

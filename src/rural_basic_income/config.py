@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     analysis_rate_limit_requests: int = 300
     analysis_rate_limit_window_seconds: int = 60
     export_csv_dir: str = "/export/csv"
+    export_dta_dir: str = "/export/dta"
 
     @property
     def sqlalchemy_database_url(self) -> str:
