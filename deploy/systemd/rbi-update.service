@@ -1,0 +1,9 @@
+[Unit]
+Description=Update Rural Basic Income datasets
+Requires=rbi-web.service
+After=rbi-web.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman exec rbi-web rbi update --latest --export
+TimeoutStartSec=12h

@@ -10,6 +10,14 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
 from rural_basic_income.db.connection import get_engine
+from rural_basic_income.indicators.saved import (
+    SavedIndicatorError,
+    create_saved_indicator,
+    delete_saved_indicator,
+    get_saved_indicator,
+    list_saved_indicators,
+    update_saved_indicator,
+)
 
 CLEAN_SCHEMA = "clean"
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -494,3 +502,108 @@ def series(
             for row in rows
         ],
     }
+
+
+@router.get("/indicators/saved")
+def list_saved_indicator_items() -> dict[str, Any]:
+    try:
+        with get_engine().connect() as connection:
+            saved = list_saved_indicators(connection)
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    return {"saved": list(saved)}
+
+
+@router.post("/indicators/saved", status_code=status.HTTP_201_CREATED)
+def create_saved_indicator_item(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        with get_engine().begin() as connection:
+            saved = create_saved_indicator(connection, payload)
+    except SavedIndicatorError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc)},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    return {"saved": saved}
+
+
+@router.get("/indicators/saved/{saved_id}")
+def get_saved_indicator_item(saved_id: str) -> dict[str, Any]:
+    try:
+        with get_engine().connect() as connection:
+            saved = get_saved_indicator(connection, saved_id)
+    except SavedIndicatorError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc)},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    if saved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="saved indicator not found",
+        )
+    return {"saved": saved}
+
+
+@router.patch("/indicators/saved/{saved_id}")
+def update_saved_indicator_item(saved_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        with get_engine().begin() as connection:
+            saved = update_saved_indicator(connection, saved_id, payload)
+    except SavedIndicatorError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc)},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    if saved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="saved indicator not found",
+        )
+    return {"saved": saved}
+
+
+@router.delete("/indicators/saved/{saved_id}")
+def delete_saved_indicator_item(saved_id: str) -> dict[str, Any]:
+    try:
+        with get_engine().begin() as connection:
+            deleted = delete_saved_indicator(connection, saved_id)
+    except SavedIndicatorError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc)},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="saved indicator not found",
+        )
+    return {"status": "deleted", "id": saved_id}

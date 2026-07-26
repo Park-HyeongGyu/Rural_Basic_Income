@@ -45,6 +45,10 @@
       renderEmptyState(element, emptyMessage);
       return;
     }
+    if (element.querySelector(".empty-state")) {
+      Plotly.purge(element);
+      element.replaceChildren();
+    }
 
     const traces = seriesGroups.map((group, index) => {
       const points = group.points.map((point) => ({
@@ -67,7 +71,7 @@
           color: colors[index % colors.length],
           size: 6,
         },
-        hovertemplate: "%{y:,.0f}<extra></extra>",
+        hovertemplate: group.hoverTemplate || options.hoverTemplate || "%{y:,.0f}<extra></extra>",
       };
     });
 
@@ -87,7 +91,7 @@
       yaxis: {
         gridcolor: "#e6ebf1",
         tickfont: { color: "#65717f" },
-        tickformat: ",",
+        tickformat: options.yTickFormat || ",",
         zeroline: false,
       },
       legend: {

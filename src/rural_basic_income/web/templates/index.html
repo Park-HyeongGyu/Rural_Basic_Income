@@ -8,6 +8,8 @@
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
     <script src="{{ url_for('static', path='line_graph.js') }}?v={{ static_versions['line_graph.js'] }}" defer></script>
     <script src="{{ url_for('static', path='app.js') }}?v={{ static_versions['app.js'] }}" defer></script>
+    <script src="{{ url_for('static', path='analysis.js') }}?v={{ static_versions['analysis.js'] }}" defer></script>
+    <script src="{{ url_for('static', path='analysis_map.js') }}?v={{ static_versions['analysis_map.js'] }}" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -18,31 +20,91 @@
       <div class="version">v{{ app_version }}</div>
     </header>
 
-    <main class="layout">
-      <section class="controls" aria-label="조회 조건">
-        <div class="control-grid">
-          <label class="field">
-            <span>시도</span>
-            <select id="sido-select"></select>
-          </label>
-          <label class="field">
-            <span>시군구</span>
-            <select id="sigungu-select"></select>
-          </label>
-          <label class="field">
-            <span>테이블</span>
-            <select id="table-select"></select>
-          </label>
-          <div class="filter-grid" id="filter-grid"></div>
-        </div>
+    <nav class="view-tabs" aria-label="화면 선택">
+      <button class="tab-button is-active" type="button" data-view-target="dashboard-view">지표</button>
+      <button class="tab-button" type="button" data-view-target="analysis-view">분석</button>
+      <button class="tab-button" type="button" data-view-target="saved-indicator-view">저장된 지표</button>
+      <button class="tab-button" type="button" data-view-target="saved-analysis-view">저장된 분석</button>
+    </nav>
 
-        <div class="variable-panel">
-          <div class="panel-heading">
-            <span>변수</span>
-            <button class="text-button" id="select-all-variables" type="button">전체</button>
+    <main class="layout app-view" id="dashboard-view">
+      <section class="dashboard-selector" aria-label="조회 조건과 지도">
+        <section class="controls" aria-label="조회 조건">
+          <div class="control-grid">
+            <label class="field">
+              <span>시도</span>
+              <select id="sido-select"></select>
+            </label>
+            <label class="field">
+              <span>시군구</span>
+              <select id="sigungu-select"></select>
+            </label>
+            <div class="control-button-row">
+              <button class="text-button" id="dashboard-add-region" type="button">추가</button>
+              <button class="text-button" id="dashboard-clear-regions" type="button">초기화</button>
+            </div>
+            <label class="field">
+              <span>테이블</span>
+              <select id="table-select"></select>
+            </label>
+            <label class="field">
+              <span>정규화</span>
+              <select id="normalize-select">
+                <option value="raw">원자료</option>
+                <option value="base100">기준월=100</option>
+              </select>
+            </label>
+            <label class="field" id="normalize-base-field">
+              <span>정규화 기준월</span>
+              <select id="normalize-base-period"></select>
+            </label>
+            <div class="filter-grid" id="filter-grid"></div>
           </div>
-          <div class="variable-list" id="variable-list"></div>
-        </div>
+
+          <div class="variable-panel">
+            <div class="panel-heading">
+              <span>변수</span>
+              <button class="text-button" id="select-all-variables" type="button">전체</button>
+            </div>
+            <div class="variable-list" id="variable-list"></div>
+          </div>
+
+          <div class="variable-panel">
+            <div class="panel-heading">
+              <span>지역</span>
+            </div>
+            <div class="selected-region-list" id="dashboard-region-list"></div>
+          </div>
+        </section>
+
+        <section
+          class="dashboard-map-panel"
+          id="dashboard-map-panel"
+          data-map-src="{{ url_for('static', path='maps/sigungu_2023_4q.json') }}?v={{ static_versions['maps/sigungu_2023_4q.json'] }}"
+          aria-label="지표 지도 선택"
+        >
+          <div class="panel-heading map-heading">
+            <span>지도 선택</span>
+            <div class="map-mode-toggle" role="group" aria-label="지표 지도 선택 모드">
+              <button class="map-mode-button is-active" type="button" data-map-mode="series" title="그래프 지역">선택</button>
+              <button class="map-mode-button" type="button" data-map-mode="clear" title="선택 해제">해제</button>
+            </div>
+          </div>
+          <div class="analysis-map-stage" data-map-stage>
+            <div class="map-frame">
+              <svg class="region-map-svg" data-map-svg role="img" aria-label="전국 시군구 지도"></svg>
+              <div class="map-loading" data-map-loading>지도 불러오는 중</div>
+            </div>
+            <aside class="map-zoom-panel is-hidden" data-map-zoom-panel aria-label="시도 확대 지도">
+              <div class="panel-heading">
+                <span data-map-zoom-title>확대</span>
+                <button class="text-button" type="button" data-map-zoom-close>닫기</button>
+              </div>
+              <svg class="region-map-svg zoom-map-svg" data-map-zoom-svg role="img" aria-label="시도 확대 지도"></svg>
+            </aside>
+          </div>
+          <div class="map-hover-line" data-map-hover aria-live="polite"></div>
+        </section>
       </section>
 
       <section class="chart-surface" aria-label="시계열 그래프">
@@ -51,7 +113,11 @@
             <p class="chart-kicker" id="chart-kicker">clean.clean_population</p>
             <h2 id="chart-title">인구</h2>
           </div>
-          <button id="refresh-button" type="button">조회</button>
+          <div class="chart-action-row">
+            <button class="text-button" id="indicator-save-button" type="button" disabled>지표 저장</button>
+            <button class="text-button is-hidden" id="indicator-update-save-button" type="button" disabled>저장 업데이트</button>
+            <button id="refresh-button" type="button">조회</button>
+          </div>
         </div>
         <div class="status-line" id="status-line">불러오는 중</div>
         <div class="chart-box">
@@ -78,6 +144,192 @@
             <tbody id="data-status-body"></tbody>
           </table>
         </div>
+      </section>
+    </main>
+
+    <main class="saved-analysis-layout app-view is-hidden" id="saved-indicator-view">
+      <section class="saved-analysis-section" aria-label="저장된 지표">
+        <div class="section-heading">
+          <h2>저장된 지표</h2>
+          <button class="text-button" id="saved-indicator-refresh" type="button">새로고침</button>
+        </div>
+        <div class="status-line" id="saved-indicator-status">저장된 지표를 불러오는 중</div>
+        <div class="saved-analysis-list" id="saved-indicator-list"></div>
+      </section>
+    </main>
+
+    <main class="analysis-layout app-view is-hidden" id="analysis-view">
+      <section class="analysis-controls" aria-label="분석 조건">
+        <div class="section-heading">
+          <h2>분석 조건</h2>
+          <span id="analysis-options-status">불러오는 중</span>
+        </div>
+
+        <div class="analysis-input-map-grid">
+          <div>
+            <div class="analysis-form-grid">
+              <label class="field">
+                <span>테이블</span>
+                <select id="analysis-table-select"></select>
+              </label>
+              <label class="field">
+                <span>변수</span>
+                <select id="analysis-variable-select"></select>
+              </label>
+              <label class="field">
+                <span>시작월</span>
+                <select id="analysis-start-period"></select>
+              </label>
+              <label class="field">
+                <span>종료월</span>
+                <select id="analysis-end-period"></select>
+              </label>
+              <label class="field">
+                <span>정규화 기준월</span>
+                <select id="analysis-base-period"></select>
+              </label>
+              <div class="filter-grid analysis-filter-grid" id="analysis-filter-grid"></div>
+            </div>
+
+            <div class="analysis-region-grid">
+              <section class="region-picker" aria-label="처리지역">
+                <div class="panel-heading">
+                  <span>처리지역</span>
+                  <button class="text-button" id="add-treatment-region" type="button">추가</button>
+                </div>
+                <div class="region-picker-grid">
+                  <label class="field">
+                    <span>시도</span>
+                    <select id="treatment-sido-select"></select>
+                  </label>
+                  <label class="field">
+                    <span>시군구</span>
+                    <select id="treatment-sigungu-select"></select>
+                  </label>
+                  <label class="field">
+                    <span>처리 시작월</span>
+                    <select id="treatment-period-select"></select>
+                  </label>
+                </div>
+                <div class="selected-region-list" id="treatment-region-list"></div>
+              </section>
+
+              <section class="region-picker" aria-label="비교지역">
+                <div class="panel-heading">
+                  <span>비교지역</span>
+                  <button class="text-button" id="add-control-region" type="button">추가</button>
+                </div>
+                <div class="region-picker-grid control-region-grid">
+                  <label class="field">
+                    <span>시도</span>
+                    <select id="control-sido-select"></select>
+                  </label>
+                  <label class="field">
+                    <span>시군구</span>
+                    <select id="control-sigungu-select"></select>
+                  </label>
+                </div>
+                <div class="selected-region-list" id="control-region-list"></div>
+              </section>
+            </div>
+          </div>
+
+          <section
+            class="analysis-map-panel"
+            id="analysis-map-panel"
+            data-map-src="{{ url_for('static', path='maps/sigungu_2023_4q.json') }}?v={{ static_versions['maps/sigungu_2023_4q.json'] }}"
+            aria-label="분석 지도 선택"
+          >
+            <div class="panel-heading map-heading">
+              <span>지도 선택</span>
+              <div class="map-mode-toggle" role="group" aria-label="분석 지도 선택 모드">
+                <button class="map-mode-button is-active" type="button" data-map-mode="treatment" title="처리지역">처리</button>
+                <button class="map-mode-button" type="button" data-map-mode="control" title="비교지역">비교</button>
+                <button class="map-mode-button" type="button" data-map-mode="clear" title="선택 해제">해제</button>
+              </div>
+            </div>
+            <div class="analysis-map-stage" data-map-stage>
+              <div class="map-frame">
+                <svg class="region-map-svg" data-map-svg role="img" aria-label="전국 시군구 지도"></svg>
+                <div class="map-loading" data-map-loading>지도 불러오는 중</div>
+              </div>
+              <aside class="map-zoom-panel is-hidden" data-map-zoom-panel aria-label="시도 확대 지도">
+                <div class="panel-heading">
+                  <span data-map-zoom-title>확대</span>
+                  <button class="text-button" type="button" data-map-zoom-close>닫기</button>
+                </div>
+                <svg class="region-map-svg zoom-map-svg" data-map-zoom-svg role="img" aria-label="시도 확대 지도"></svg>
+              </aside>
+            </div>
+            <div class="map-hover-line" data-map-hover aria-live="polite"></div>
+          </section>
+        </div>
+
+        <div class="analysis-actions">
+          <button id="analysis-run-button" type="button">분석 실행</button>
+          <button class="text-button" id="analysis-rerun-button" type="button">캐시 무시 실행</button>
+          <button class="text-button" id="analysis-save-button" type="button" disabled>분석 저장</button>
+          <button class="text-button is-hidden" id="analysis-update-save-button" type="button" disabled>저장 업데이트</button>
+        </div>
+      </section>
+
+      <section class="analysis-results" aria-label="분석 결과">
+        <div class="section-heading">
+          <h2>분석 결과</h2>
+          <span id="analysis-result-badge"></span>
+        </div>
+        <div class="status-line" id="analysis-status-line">분석 조건을 선택하세요</div>
+
+        <div class="analysis-summary-grid" id="analysis-summary-grid">
+          <div class="summary-item">
+            <span>TWFE 추정치</span>
+            <strong id="twfe-estimate">-</strong>
+          </div>
+          <div class="summary-item">
+            <span>표준오차</span>
+            <strong id="twfe-standard-error">-</strong>
+          </div>
+          <div class="summary-item">
+            <span>관측치</span>
+            <strong id="analysis-observations">-</strong>
+          </div>
+          <div class="summary-item">
+            <span>지역</span>
+            <strong id="analysis-regions">-</strong>
+          </div>
+        </div>
+
+        <div class="analysis-warning-list" id="analysis-warning-list"></div>
+
+        <div class="chart-box analysis-chart-box">
+          <div id="event-study-chart"></div>
+        </div>
+
+        <div class="analysis-table-wrap">
+          <table class="status-table analysis-result-table">
+            <thead>
+              <tr>
+                <th>Event Time</th>
+                <th>Estimate</th>
+                <th>Std. Error</th>
+                <th>95% CI</th>
+                <th>Obs.</th>
+              </tr>
+            </thead>
+            <tbody id="event-study-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <main class="saved-analysis-layout app-view is-hidden" id="saved-analysis-view">
+      <section class="saved-analysis-section" aria-label="저장된 분석">
+        <div class="section-heading">
+          <h2>저장된 분석</h2>
+          <button class="text-button" id="saved-analysis-refresh" type="button">새로고침</button>
+        </div>
+        <div class="status-line" id="saved-analysis-status">저장된 분석을 불러오는 중</div>
+        <div class="saved-analysis-list" id="saved-analysis-list"></div>
       </section>
     </main>
   </body>

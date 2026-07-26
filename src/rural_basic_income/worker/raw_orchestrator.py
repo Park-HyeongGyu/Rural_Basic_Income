@@ -8,12 +8,17 @@ from typing import Any, Literal
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from rural_basic_income.config import Settings, get_settings
 from rural_basic_income.db.connection import get_engine
 from rural_basic_income.worker.download import (
     SourcePeriodDownload,
     SourcePeriodUnavailable,
 )
-from rural_basic_income.worker.periods import iter_month_periods, validate_period
+from rural_basic_income.worker.periods import (
+    current_month_period,
+    iter_month_periods,
+    validate_period,
+)
 from rural_basic_income.worker import raw_writer
 from rural_basic_income.worker.sources import (
     electricity,
@@ -28,6 +33,7 @@ LOGGER = logging.getLogger(__name__)
 RawRefreshStatus = Literal[
     "skipped_existing",
     "skipped_unavailable",
+    "skipped_unavailable_existing",
     "downloaded_written",
     "downloaded_skipped",
 ]
@@ -41,6 +47,7 @@ DEFAULT_RAW_SOURCES = (
     "electricity",
     "local_currency",
 )
+DEFAULT_LATEST_START_PERIOD = "202501"
 
 SOURCE_DOWNLOADERS: dict[str, DownloadFunction] = {
     "household": household.download_household,
@@ -49,6 +56,13 @@ SOURCE_DOWNLOADERS: dict[str, DownloadFunction] = {
     "electricity": electricity.download_electricity,
     "local_currency": local_currency.download_local_currency,
 }
+
+
+def default_latest_start_period(settings: Settings | None = None) -> str:
+    return validate_period(
+        (settings or get_settings()).rbi_latest_start_period
+        or DEFAULT_LATEST_START_PERIOD
+    )
 
 
 class RawOrchestratorError(RuntimeError):
@@ -68,7 +82,14 @@ class RawRefreshResult:
 
     @property
     def unavailable(self) -> bool:
-        return self.status == "skipped_unavailable"
+        return self.status in {
+            "skipped_unavailable",
+            "skipped_unavailable_existing",
+        }
+
+    @property
+    def preserved_existing(self) -> bool:
+        return self.status == "skipped_unavailable_existing"
 
 
 @dataclass(frozen=True)
@@ -163,6 +184,40 @@ def source_period_success_row_count(
     if row_count is None:
         return None
     return int(row_count or 0)
+
+
+def source_last_success_period(
+    source_name: str,
+    *,
+    engine: Engine | None = None,
+) -> str | None:
+    db_engine = engine or get_engine()
+    with db_engine.connect() as connection:
+        if not raw_writer.table_exists(
+            connection,
+            "metadata",
+            "download_status",
+        ):
+            return None
+
+        period = connection.execute(
+            text(
+                """
+                SELECT max(period)
+                FROM metadata.download_status
+                WHERE source_name = :source_name
+                  AND status = :status
+                """
+            ),
+            {
+                "source_name": source_name,
+                "status": raw_writer.DOWNLOAD_STATUS_OK,
+            },
+        ).scalar_one_or_none()
+
+    if period is None:
+        return None
+    return validate_period(str(period))
 
 
 def get_downloader(
@@ -271,28 +326,27 @@ def _refresh_source_period(
         validated_period,
         force,
     )
-    if not force:
-        existing_row_count = source_period_success_row_count(
+    existing_row_count = source_period_success_row_count(
+        source_name,
+        validated_period,
+        engine=db_engine,
+    )
+    if existing_row_count is not None and not force:
+        LOGGER.info(
+            "raw refresh skipped existing source=%s period=%s rows=%d",
             source_name,
             validated_period,
-            engine=db_engine,
+            existing_row_count,
         )
-        if existing_row_count is not None:
-            LOGGER.info(
-                "raw refresh skipped existing source=%s period=%s rows=%d",
-                source_name,
-                validated_period,
-                existing_row_count,
-            )
-            return (
-                RawRefreshResult(
-                    source_name=source_name,
-                    period=validated_period,
-                    status="skipped_existing",
-                    row_count=existing_row_count,
-                ),
-                None,
-            )
+        return (
+            RawRefreshResult(
+                source_name=source_name,
+                period=validated_period,
+                status="skipped_existing",
+                row_count=existing_row_count,
+            ),
+            None,
+        )
 
     try:
         download = download_source_period(
@@ -304,6 +358,13 @@ def _refresh_source_period(
     except Exception as exc:
         unavailable_message = source_period_unavailable_message(exc)
         if allow_unavailable and unavailable_message:
+            if force and existing_row_count is not None:
+                return preserve_existing_source_period_after_unavailable(
+                    source_name=source_name,
+                    period=validated_period,
+                    row_count=existing_row_count,
+                    message=unavailable_message,
+                )
             return mark_unavailable_source_period(
                 source_name=source_name,
                 period=validated_period,
@@ -313,13 +374,21 @@ def _refresh_source_period(
         raise
 
     if allow_unavailable and download.raw_row_count == 0:
+        unavailable_message = (
+            f"{download.source_name} source returned no rows "
+            f"for period {validated_period}"
+        )
+        if force and existing_row_count is not None:
+            return preserve_existing_source_period_after_unavailable(
+                source_name=source_name,
+                period=validated_period,
+                row_count=existing_row_count,
+                message=unavailable_message,
+            )
         return mark_unavailable_source_period(
             source_name=source_name,
             period=validated_period,
-            message=(
-                f"{download.source_name} source returned no rows "
-                f"for period {validated_period}"
-            ),
+            message=unavailable_message,
             engine=db_engine,
         )
 
@@ -385,6 +454,32 @@ def mark_unavailable_source_period(
             period=period,
             status="skipped_unavailable",
             row_count=0,
+        ),
+        None,
+    )
+
+
+def preserve_existing_source_period_after_unavailable(
+    *,
+    source_name: str,
+    period: str,
+    row_count: int,
+    message: str,
+) -> tuple[RawRefreshResult, None]:
+    LOGGER.warning(
+        "raw refresh force unavailable; keeping existing success "
+        "source=%s period=%s existing_rows=%d message=%s",
+        source_name,
+        period,
+        row_count,
+        message,
+    )
+    return (
+        RawRefreshResult(
+            source_name=source_name,
+            period=period,
+            status="skipped_unavailable_existing",
+            row_count=row_count,
         ),
         None,
     )
@@ -477,4 +572,59 @@ def refresh_raw_range(
         end_period,
         len(results),
     )
+    return tuple(results)
+
+
+def refresh_raw_latest(
+    *,
+    sources: Sequence[str] | None = None,
+    engine: Engine | None = None,
+    force: bool = False,
+    fallback_start_period: str | None = None,
+    end_period: str | None = None,
+    source_options: Mapping[str, Mapping[str, Any]] | None = None,
+    downloaders: Mapping[str, DownloadFunction] | None = None,
+    writer: RawWriterFunction = raw_writer.write_source_period_download,
+    continue_on_unavailable: bool = True,
+) -> tuple[RawRefreshResult, ...]:
+    db_engine = engine or get_engine()
+    resolved_sources = tuple(sources or DEFAULT_RAW_SOURCES)
+    validated_end_period = validate_period(end_period or current_month_period())
+    validated_fallback = validate_period(
+        fallback_start_period or default_latest_start_period()
+    )
+    results: list[RawRefreshResult] = []
+
+    LOGGER.info(
+        "raw refresh latest start sources=%s fallback_start_period=%s "
+        "end_period=%s force=%s",
+        resolved_sources,
+        validated_fallback,
+        validated_end_period,
+        force,
+    )
+    for source_name in resolved_sources:
+        LOGGER.info(
+            "raw refresh latest source range source=%s start_period=%s "
+            "end_period=%s force=%s",
+            source_name,
+            validated_fallback,
+            validated_end_period,
+            force,
+        )
+        results.extend(
+            refresh_raw_range(
+                validated_fallback,
+                validated_end_period,
+                sources=(source_name,),
+                engine=db_engine,
+                force=force,
+                source_options=source_options,
+                downloaders=downloaders,
+                writer=writer,
+                continue_on_unavailable=continue_on_unavailable,
+            )
+        )
+
+    LOGGER.info("raw refresh latest complete results=%d", len(results))
     return tuple(results)

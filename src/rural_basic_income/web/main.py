@@ -12,13 +12,21 @@ from rural_basic_income.db.connection import (
     DatabaseUnavailable,
     assert_database_ready,
 )
+from rural_basic_income.web.api.analysis import router as analysis_router
 from rural_basic_income.web.api.data import router as data_router
 
 WEB_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEB_DIR / "static"
 TEMPLATES_DIR = WEB_DIR / "templates"
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
-STATIC_ASSETS = ("styles.css", "line_graph.js", "app.js")
+STATIC_ASSETS = (
+    "styles.css",
+    "line_graph.js",
+    "app.js",
+    "analysis.js",
+    "analysis_map.js",
+    "maps/sigungu_2023_4q.json",
+)
 
 
 @lru_cache
@@ -87,6 +95,7 @@ def create_app() -> FastAPI:
         tags=["health"],
     )
     app.include_router(data_router)
+    app.include_router(analysis_router)
 
     return app
 
