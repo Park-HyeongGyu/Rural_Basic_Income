@@ -55,7 +55,8 @@ timer/service smoke testing, final documentation review, and
 
 - The canonical public CLI command is `rbi`; do not reintroduce the
   `rbi-worker` console script.
-- `rbi update --latest` operates per source, not with one global latest period.
+- `rbi update --latest` scans all source-periods in the requested/latest range
+  and skips only rows already recorded as `metadata.download_status.status = 1`.
 - A missing or unpublished month for one source must not block other sources.
 - Data updates are run by host user systemd through `podman exec rbi-web ...`.
 - Do not use Celery for data updates.

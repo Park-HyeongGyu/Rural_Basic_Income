@@ -49,6 +49,17 @@ class CleanDatasetResult:
     dataset_name: str
     sql_file: Path
     statement_count: int
+    affected_row_count: int = 0
+    revision: int | None = None
+    revision_changed: bool = False
+
+
+@dataclass(frozen=True)
+class CleanSqlRunResult:
+    statement_count: int
+    affected_row_count: int
+    revision: int | None
+    revision_changed: bool
 
 
 CLEAN_DATASETS = (
@@ -96,6 +107,37 @@ CLEAN_DATASETS = (
 DEFAULT_CLEAN_DATASETS = tuple(spec.dataset_name for spec in CLEAN_DATASETS)
 
 
+def clean_dataset_by_name() -> dict[str, CleanDatasetSpec]:
+    return {spec.dataset_name: spec for spec in CLEAN_DATASETS}
+
+
+def clean_dataset_by_table() -> dict[str, CleanDatasetSpec]:
+    return {
+        table_name: spec
+        for spec in CLEAN_DATASETS
+        for table_name in spec.clean_tables
+    }
+
+
+def unqualified_clean_table_name(table_name: str) -> str:
+    normalized = table_name.strip().strip('"')
+    if normalized.startswith("clean."):
+        normalized = normalized.removeprefix("clean.").strip('"')
+    return normalized
+
+
+def clean_dataset_name_for_table(table_name: str) -> str:
+    clean_table_name = unqualified_clean_table_name(table_name)
+    try:
+        return clean_dataset_by_table()[clean_table_name].dataset_name
+    except KeyError as exc:
+        valid_tables = ", ".join(sorted(clean_dataset_by_table()))
+        raise CleanOrchestratorError(
+            f"unknown clean table for dataset revision: {table_name}. "
+            f"valid clean tables: {valid_tables}"
+        ) from exc
+
+
 def read_sql_statements(path: Path) -> list[str]:
     sql = path.read_text(encoding="utf-8")
     return [
@@ -121,6 +163,15 @@ def setup_statement(statement: str) -> bool:
     )
 
 
+def clean_data_statement(statement: str) -> bool:
+    normalized = statement.strip().upper()
+    return (
+        normalized.startswith("INSERT INTO CLEAN.")
+        or normalized.startswith("UPDATE CLEAN.")
+        or normalized.startswith("DELETE FROM CLEAN.")
+    )
+
+
 def delete_clean_periods(
     connection: Connection,
     *,
@@ -129,7 +180,7 @@ def delete_clean_periods(
 ) -> int:
     validated_periods = tuple(iter_month_periods(periods[0], periods[-1]))
     period_values = ", ".join(str(int(period)) for period in validated_periods)
-    deleted_tables = 0
+    affected_row_count = 0
 
     for table_name in clean_tables:
         LOGGER.info(
@@ -137,15 +188,112 @@ def delete_clean_periods(
             table_name,
             validated_periods,
         )
-        connection.exec_driver_sql(
+        result = connection.exec_driver_sql(
             f"""
             DELETE FROM clean.{quote_identifier(table_name)}
             WHERE date IN ({period_values})
             """
         )
-        deleted_tables += 1
+        row_count = getattr(result, "rowcount", -1)
+        if row_count and row_count > 0:
+            affected_row_count += int(row_count)
 
-    return deleted_tables
+    return affected_row_count
+
+
+def ensure_clean_dataset_revision_table(
+    connection: Connection,
+    *,
+    datasets: Sequence[str] | None = None,
+) -> None:
+    dataset_names = tuple(datasets or DEFAULT_CLEAN_DATASETS)
+    unknown = sorted(set(dataset_names) - set(clean_dataset_by_name()))
+    if unknown:
+        raise CleanOrchestratorError(
+            f"unknown clean dataset revision row: {', '.join(unknown)}"
+        )
+
+    connection.execute(text("CREATE SCHEMA IF NOT EXISTS metadata"))
+    connection.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS metadata.clean_dataset_revision (
+                dataset_name text PRIMARY KEY,
+                revision bigint NOT NULL DEFAULT 0,
+                updated_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            INSERT INTO metadata.clean_dataset_revision (
+                dataset_name,
+                revision,
+                updated_at
+            )
+            VALUES (:dataset_name, 0, now())
+            ON CONFLICT (dataset_name) DO NOTHING
+            """
+        ),
+        [{"dataset_name": dataset_name} for dataset_name in dataset_names],
+    )
+
+
+def bump_clean_dataset_revision(
+    connection: Connection,
+    *,
+    dataset_name: str,
+) -> int:
+    if dataset_name not in clean_dataset_by_name():
+        raise CleanOrchestratorError(
+            f"unknown clean dataset revision bump: {dataset_name}"
+        )
+
+    revision = connection.execute(
+        text(
+            """
+            INSERT INTO metadata.clean_dataset_revision (
+                dataset_name,
+                revision,
+                updated_at
+            )
+            VALUES (:dataset_name, 1, now())
+            ON CONFLICT (dataset_name)
+            DO UPDATE SET
+                revision = metadata.clean_dataset_revision.revision + 1,
+                updated_at = now()
+            RETURNING revision
+            """
+        ),
+        {"dataset_name": dataset_name},
+    ).scalar_one()
+    return int(revision)
+
+
+def fetch_clean_dataset_revision(
+    connection: Connection,
+    *,
+    dataset_name: str,
+) -> int:
+    revision = connection.execute(
+        text(
+            """
+            SELECT revision
+            FROM metadata.clean_dataset_revision
+            WHERE dataset_name = :dataset_name
+            """
+        ),
+        {"dataset_name": dataset_name},
+    ).scalar_one_or_none()
+    if revision is None:
+        raise CleanOrchestratorError(
+            "clean dataset revision is missing: "
+            f"{dataset_name}. Run `rbi clean --datasets {dataset_name}` "
+            "or `rbi update --latest` before analysis."
+        )
+    return int(revision)
 
 
 def load_region_merge_key(
@@ -302,9 +450,10 @@ def run_sql_file(
     connection: Connection,
     path: Path,
     *,
+    dataset_name: str | None = None,
     rebuild_tables: Sequence[str] = (),
     rebuild_periods: Sequence[str] = (),
-) -> int:
+) -> CleanSqlRunResult:
     statements = read_sql_statements(path)
     LOGGER.info(
         "clean sql file execute start file=%s statements=%d",
@@ -314,10 +463,30 @@ def run_sql_file(
     try:
         in_transaction = False
         rebuild_deleted = False
+        affected_row_count = 0
+        revision: int | None = None
+        revision_changed = False
         for statement in statements:
             if statement.upper() == "BEGIN":
                 connection.exec_driver_sql(statement)
                 in_transaction = True
+                continue
+
+            if statement.upper() == "COMMIT":
+                if dataset_name is not None:
+                    if affected_row_count > 0:
+                        revision = bump_clean_dataset_revision(
+                            connection,
+                            dataset_name=dataset_name,
+                        )
+                        revision_changed = True
+                    else:
+                        revision = fetch_clean_dataset_revision(
+                            connection,
+                            dataset_name=dataset_name,
+                        )
+                connection.exec_driver_sql(statement)
+                in_transaction = False
                 continue
 
             if (
@@ -327,13 +496,17 @@ def run_sql_file(
                 and not rebuild_deleted
                 and not setup_statement(statement)
             ):
-                delete_clean_periods(
+                affected_row_count += delete_clean_periods(
                     connection,
                     clean_tables=rebuild_tables,
                     periods=rebuild_periods,
                 )
                 rebuild_deleted = True
-            connection.exec_driver_sql(statement)
+            result = connection.exec_driver_sql(statement)
+            if clean_data_statement(statement):
+                row_count = getattr(result, "rowcount", -1)
+                if row_count and row_count > 0:
+                    affected_row_count += int(row_count)
     except Exception:
         LOGGER.exception(
             "clean sql file failed file=%s transaction=rollback",
@@ -343,11 +516,20 @@ def run_sql_file(
         raise
 
     LOGGER.info(
-        "clean sql file execute complete file=%s statements=%d",
+        "clean sql file execute complete file=%s statements=%d "
+        "affected_rows=%d revision=%s revision_changed=%s",
         path,
         len(statements),
+        affected_row_count,
+        revision,
+        revision_changed,
     )
-    return len(statements)
+    return CleanSqlRunResult(
+        statement_count=len(statements),
+        affected_row_count=affected_row_count,
+        revision=revision,
+        revision_changed=revision_changed,
+    )
 
 
 def run_clean_datasets(
@@ -384,6 +566,10 @@ def run_clean_datasets(
         )
         LOGGER.info("clean sql lock acquired")
         try:
+            ensure_clean_dataset_revision_table(
+                connection,
+                datasets=tuple(spec.dataset_name for spec in specs),
+            )
             load_clean_dependencies(connection)
             for spec in specs:
                 LOGGER.info(
@@ -391,9 +577,10 @@ def run_clean_datasets(
                     spec.dataset_name,
                     spec.sql_file,
                 )
-                statement_count = run_sql_file(
+                sql_result = run_sql_file(
                     connection,
                     spec.sql_file,
+                    dataset_name=spec.dataset_name,
                     rebuild_tables=spec.clean_tables if rebuild else (),
                     rebuild_periods=rebuild_periods,
                 )
@@ -401,13 +588,20 @@ def run_clean_datasets(
                     CleanDatasetResult(
                         dataset_name=spec.dataset_name,
                         sql_file=spec.sql_file,
-                        statement_count=statement_count,
+                        statement_count=sql_result.statement_count,
+                        affected_row_count=sql_result.affected_row_count,
+                        revision=sql_result.revision,
+                        revision_changed=sql_result.revision_changed,
                     )
                 )
                 LOGGER.info(
-                    "clean dataset complete dataset=%s statements=%d",
+                    "clean dataset complete dataset=%s statements=%d "
+                    "affected_rows=%d revision=%s revision_changed=%s",
                     spec.dataset_name,
-                    statement_count,
+                    sql_result.statement_count,
+                    sql_result.affected_row_count,
+                    sql_result.revision,
+                    sql_result.revision_changed,
                 )
         finally:
             connection.execute(

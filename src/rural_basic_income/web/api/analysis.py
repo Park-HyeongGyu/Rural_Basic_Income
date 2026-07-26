@@ -12,9 +12,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from rural_basic_income.analysis.cache import (
     ANALYSIS_VERSION,
+    AnalysisDataRevisionError,
     claim_running_task,
     clear_running_task,
-    fetch_data_revision,
+    fetch_analysis_data_revision,
     make_analysis_cache_key,
     read_cached_result,
     read_running_task_id,
@@ -28,7 +29,12 @@ from rural_basic_income.analysis.saved import (
     list_saved_analyses,
     update_saved_analysis,
 )
-from rural_basic_income.analysis.tasks import create_redis_client, run_analysis_task
+from rural_basic_income.analysis.specification import parse_analysis_request
+from rural_basic_income.analysis.tasks import (
+    CLAIMED_CACHE_KEY_FIELD,
+    create_redis_client,
+    run_analysis_task,
+)
 from rural_basic_income.config import get_settings
 from rural_basic_income.db.connection import get_engine
 from rural_basic_income.web.api.data import (
@@ -109,12 +115,21 @@ def create_analysis_job(
     try:
         redis_client = create_redis_client(settings)
         enforce_rate_limit(redis_client, request)
+        request_spec = parse_analysis_request(payload)
         with get_engine().connect() as connection:
-            data_revision = fetch_data_revision(connection)
+            data_revision = fetch_analysis_data_revision(
+                connection,
+                outcome_table=request_spec.outcome.table,
+            )
         cache_key = make_analysis_cache_key(payload, data_revision=data_revision)
     except AnalysisSpecError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc)},
+        ) from exc
+    except AnalysisDataRevisionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"message": str(exc)},
         ) from exc
     except (RedisError, SQLAlchemyError) as exc:
@@ -149,6 +164,8 @@ def create_analysis_job(
             }
 
         task_id = uuid4().hex
+        task_payload = dict(payload)
+        task_payload[CLAIMED_CACHE_KEY_FIELD] = cache_key
         claimed = claim_running_task(
             redis_client,
             cache_key,
@@ -167,7 +184,7 @@ def create_analysis_job(
             }
 
         try:
-            queued_task_id = enqueue_analysis_task(payload, task_id=task_id)
+            queued_task_id = enqueue_analysis_task(task_payload, task_id=task_id)
         except Exception as exc:
             clear_running_task(redis_client, cache_key, task_id=task_id)
             raise HTTPException(
@@ -241,7 +258,7 @@ def get_analysis_result(cache_key: str) -> dict[str, Any]:
         "status": "success",
         "cached": True,
         "cache_key": cache_key,
-        "data_revision": None,
+        "data_revision": result.get("data_revision"),
         "analysis_version": ANALYSIS_VERSION,
         "result": result,
     }

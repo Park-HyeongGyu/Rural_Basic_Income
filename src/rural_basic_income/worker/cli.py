@@ -94,7 +94,10 @@ def print_clean_results(
     for result in results:
         print(
             f"  {result.dataset_name}: "
-            f"{result.sql_file.name} statements={result.statement_count}",
+            f"{result.sql_file.name} statements={result.statement_count} "
+            f"affected_rows={result.affected_row_count} "
+            f"revision={result.revision if result.revision is not None else 'unknown'} "
+            f"revision_changed={result.revision_changed}",
             file=output,
         )
 
@@ -265,7 +268,7 @@ def run_update_latest(
             tuple(datasets)
             if datasets is not None
             else clean_orchestrator.DEFAULT_CLEAN_DATASETS,
-            fallback_start_period or raw_orchestrator.DEFAULT_LATEST_START_PERIOD,
+            fallback_start_period or raw_orchestrator.default_latest_start_period(),
             end_period,
             force_raw,
         )
@@ -274,7 +277,8 @@ def run_update_latest(
             engine=db_engine,
             force=force_raw,
             fallback_start_period=(
-                fallback_start_period or raw_orchestrator.DEFAULT_LATEST_START_PERIOD
+                fallback_start_period
+                or raw_orchestrator.default_latest_start_period()
             ),
             end_period=end_period,
         )
@@ -488,15 +492,17 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
         "--latest",
         action="store_true",
         help=(
-            "refresh from each source's last successful period through the "
-            "current month"
+            "scan every source-period from --start-period or the default "
+            "latest start through the current month, skipping only periods "
+            "already marked successful. Default start comes from "
+            "RBI_LATEST_START_PERIOD"
         ),
     )
     update_parser.add_argument(
         "--start-period",
         help=(
             "first monthly period to refresh, formatted as YYYYMM. With "
-            "--latest, this is used only when a source has no successful period"
+            "--latest, this is the first period scanned for every source"
         ),
     )
     update_parser.add_argument(

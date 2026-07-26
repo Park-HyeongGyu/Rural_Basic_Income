@@ -43,7 +43,7 @@ v0.3.0에서 구현한 방향:
 - `rbi clean --rebuild`
 - `rbi status`
 - `rbi export`
-- source별 latest period 탐색
+- `--latest` 범위 전체 scan 후 성공 source-period만 skip
 - update-level advisory lock
 - host user systemd timer가 `podman exec rbi-web rbi update --latest` 실행
 - scheduled updater container 제거
@@ -161,6 +161,7 @@ KEPCO_API_KEY=your-api-key
 DATA_GO_KR_API_KEY=your-api-key
 EXPORT_CSV_DIR=/export/csv
 EXPORT_DTA_DIR=/export/dta
+RBI_LATEST_START_PERIOD=202501
 ```
 
 Download raw data for a period range and then run clean SQL:
@@ -171,10 +172,19 @@ Download raw data for a period range and then run clean SQL:
   --end-period 202606
 ```
 
-Refresh from each source's last successful period through the current month:
+Scan every source x month from `RBI_LATEST_START_PERIOD` to the current month.
+If the environment variable is not set, the built-in fallback is `202501`.
+Periods with `metadata.download_status.status = 1` are skipped; missing
+metadata and previous `status = 2` rows are requested again:
 
 ```bash
 .venv/bin/rbi update --latest
+```
+
+Override the scan window when needed:
+
+```bash
+.venv/bin/rbi update --latest --start-period 202601 --end-period 202606
 ```
 
 Refresh only missing source-periods and export professor-facing CSV and Stata
@@ -362,6 +372,16 @@ Run a manual update inside the running web container:
 ```bash
 podman exec rbi-web rbi update --latest
 ```
+
+`--latest` scans the full configured window and retries missing or previously
+failed source-periods while leaving successful source-periods untouched. Add
+`--force-raw` only when successful raw source-periods should be redownloaded
+and atomically replaced too.
+
+On the server, the default `--latest` scan start is controlled by
+`RBI_LATEST_START_PERIOD` in the web container environment. Change that value
+in `.env` or `deploy/quadlet/rbi-web.container`, then reload/restart the user
+service before the next update.
 
 Run an update and refresh the shared CSV and DTA files only if new raw data was
 written:

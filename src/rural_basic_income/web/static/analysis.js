@@ -632,6 +632,7 @@
       );
       periodSelect.addEventListener("change", () => {
         state.treatments[index].treatment_period = periodSelect.value;
+        markAnalysisDirty();
       });
 
       const remove = document.createElement("button");
@@ -946,8 +947,8 @@
         },
         {
           type: "line",
-          x0: -1,
-          x1: -1,
+          x0: 0,
+          x1: 0,
           y0: 0,
           y1: 1,
           yref: "paper",

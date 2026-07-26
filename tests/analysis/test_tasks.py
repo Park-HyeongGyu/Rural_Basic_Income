@@ -23,28 +23,69 @@ from rural_basic_income.analysis.regression import (
 from rural_basic_income.analysis.tasks import run_analysis_job
 
 
-class MappingOneResult:
-    def __init__(self, row):
-        self.row = row
+class ScalarResult:
+    def __init__(self, value):
+        self.value = value
 
-    def mappings(self):
-        return self
-
-    def one(self):
-        return self.row
+    def scalar_one_or_none(self):
+        return self.value
 
 
 class FakeConnection:
     def execute(self, statement, parameters=None):
         sql = str(statement)
-        if "metadata.download_status" in sql:
-            return MappingOneResult(
-                {
-                    "success_count": 2,
-                    "latest_success_at": "2026-07-25 00:00:00+00",
-                }
-            )
+        if "metadata.clean_dataset_revision" in sql:
+            assert parameters == {"dataset_name": "population"}
+            return ScalarResult(7)
         raise AssertionError(f"unexpected SQL: {sql}")
+
+
+class SnapshotConnection(FakeConnection):
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def __enter__(self):
+        self.events.append("connect_enter")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.events.append("connect_exit")
+        return False
+
+    def execution_options(self, **kwargs):
+        self.events.append(f"execution_options:{kwargs}")
+        return self
+
+    def begin(self):
+        connection = self
+
+        class TransactionContext:
+            def __enter__(self):
+                connection.events.append("transaction_enter")
+                return connection
+
+            def __exit__(self, exc_type, exc, traceback):
+                connection.events.append("transaction_exit")
+                return False
+
+        return TransactionContext()
+
+    def execute(self, statement, parameters=None):
+        sql = str(statement)
+        if "SET TRANSACTION READ ONLY" in sql:
+            self.events.append("set_read_only")
+            return ScalarResult(None)
+        if "metadata.clean_dataset_revision" in sql:
+            self.events.append("fetch_revision")
+        return super().execute(statement, parameters)
+
+
+class SnapshotEngine:
+    def __init__(self, connection: SnapshotConnection) -> None:
+        self.connection = connection
+
+    def connect(self):
+        return self.connection
 
 
 class DictRedis:
@@ -202,10 +243,41 @@ def test_run_analysis_job_writes_success_cache() -> None:
     assert read_cached_result(redis_client, result["cache_key"]) == result["result"]
 
 
+def test_run_analysis_job_reads_revision_and_panel_in_read_only_snapshot() -> None:
+    redis_client = DictRedis()
+    payload = make_payload()
+    connection = SnapshotConnection()
+
+    def panel_loader(connection_arg, outcome, spec):
+        assert connection_arg is connection
+        connection.events.append("load_panel")
+        return make_loaded_panel()
+
+    def twfe_runner(_panel):
+        connection.events.append("fit_twfe")
+        return make_twfe_result()
+
+    result = run_analysis_job(
+        payload,
+        engine=SnapshotEngine(connection),
+        redis_client=redis_client,
+        settings=SettingsStub(),
+        panel_loader=panel_loader,
+        twfe_runner=twfe_runner,
+        event_study_runner=lambda _panel: make_event_study_result(),
+    )
+
+    assert result["status"] == "success"
+    assert "execution_options:{'isolation_level': 'REPEATABLE READ'}" in connection.events
+    assert connection.events.index("set_read_only") < connection.events.index("fetch_revision")
+    assert connection.events.index("fetch_revision") < connection.events.index("load_panel")
+    assert connection.events.index("transaction_exit") < connection.events.index("fit_twfe")
+
+
 def test_run_analysis_job_clears_running_lock_after_success() -> None:
     redis_client = DictRedis()
     payload = make_payload()
-    data_revision = "metadata.download_status:2:2026-07-25 00:00:00+00"
+    data_revision = "metadata.clean_dataset_revision:population:7"
     cache_key = make_analysis_cache_key(payload, data_revision=data_revision)
     claim_running_task(redis_client, cache_key, "task-1", ttl_seconds=60)
 
@@ -223,10 +295,40 @@ def test_run_analysis_job_clears_running_lock_after_success() -> None:
     assert read_running_task_id(redis_client, cache_key) is None
 
 
+def test_run_analysis_job_clears_claimed_cache_key_when_revision_changes() -> None:
+    redis_client = DictRedis()
+    payload = make_payload()
+    claimed_cache_key = make_analysis_cache_key(
+        payload,
+        data_revision="metadata.clean_dataset_revision:population:6",
+    )
+    task_payload = dict(payload)
+    task_payload["_claimed_cache_key"] = claimed_cache_key
+    claim_running_task(redis_client, claimed_cache_key, "task-1", ttl_seconds=60)
+
+    run_analysis_job(
+        task_payload,
+        connection=FakeConnection(),
+        redis_client=redis_client,
+        settings=SettingsStub(),
+        panel_loader=lambda _connection, _outcome, _spec: make_loaded_panel(),
+        twfe_runner=lambda _panel: make_twfe_result(),
+        event_study_runner=lambda _panel: make_event_study_result(),
+        running_task_id="task-1",
+    )
+
+    actual_cache_key = make_analysis_cache_key(
+        payload,
+        data_revision="metadata.clean_dataset_revision:population:7",
+    )
+    assert read_running_task_id(redis_client, claimed_cache_key) is None
+    assert read_running_task_id(redis_client, actual_cache_key) is None
+
+
 def test_run_analysis_job_returns_cache_hit_without_loading_panel() -> None:
     redis_client = DictRedis()
     payload = make_payload()
-    data_revision = "metadata.download_status:2:2026-07-25 00:00:00+00"
+    data_revision = "metadata.clean_dataset_revision:population:7"
     cache_key = make_analysis_cache_key(payload, data_revision=data_revision)
     redis_client.setex(
         f"rbi:analysis:result:{cache_key}",
@@ -252,7 +354,7 @@ def test_run_analysis_job_returns_cache_hit_without_loading_panel() -> None:
 def test_force_rerun_ignores_cache_but_preserves_old_cache_on_failure() -> None:
     redis_client = DictRedis()
     payload = make_payload(force=True)
-    data_revision = "metadata.download_status:2:2026-07-25 00:00:00+00"
+    data_revision = "metadata.clean_dataset_revision:population:7"
     cache_key = make_analysis_cache_key(payload, data_revision=data_revision)
     redis_client.setex(
         f"rbi:analysis:result:{cache_key}",

@@ -243,6 +243,59 @@ def test_run_update_skips_export_when_nothing_was_written() -> None:
     assert "skipped: no raw writes or clean rebuild" in output.getvalue()
 
 
+def test_run_update_latest_uses_configured_default_start_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "default_latest_start_period",
+        lambda: "202401",
+    )
+
+    def raw_latest_runner(**kwargs):
+        calls.append(kwargs)
+        return ()
+
+    cli.run_update_latest(
+        engine=object(),
+        raw_latest_runner=raw_latest_runner,
+        clean_runner=lambda *args, **kwargs: (),
+        output=io.StringIO(),
+        lock_update=False,
+    )
+
+    assert calls[0]["fallback_start_period"] == "202401"
+
+
+def test_run_update_latest_start_period_overrides_configured_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "default_latest_start_period",
+        lambda: "202401",
+    )
+
+    def raw_latest_runner(**kwargs):
+        calls.append(kwargs)
+        return ()
+
+    cli.run_update_latest(
+        fallback_start_period="202405",
+        engine=object(),
+        raw_latest_runner=raw_latest_runner,
+        clean_runner=lambda *args, **kwargs: (),
+        output=io.StringIO(),
+        lock_update=False,
+    )
+
+    assert calls[0]["fallback_start_period"] == "202405"
+
+
 def test_run_update_uses_update_overlap_lock() -> None:
     calls: list[str] = []
     connection = LockingConnection(lock_result=True)

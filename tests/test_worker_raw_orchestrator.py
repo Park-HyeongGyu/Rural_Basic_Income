@@ -5,12 +5,19 @@ from typing import Any
 
 import pytest
 
+from rural_basic_income.config import Settings
 from rural_basic_income.worker import raw_orchestrator, raw_writer
 from rural_basic_income.worker.download import (
     PayloadChunk,
     SourcePeriodDownload,
     SourcePeriodUnavailable,
 )
+
+
+def test_default_latest_start_period_uses_settings_value() -> None:
+    settings = Settings(rbi_latest_start_period="202401")
+
+    assert raw_orchestrator.default_latest_start_period(settings) == "202401"
 
 
 def make_download(
@@ -384,19 +391,17 @@ def test_refresh_raw_range_runs_periods_in_order(
     ]
 
 
-def test_refresh_raw_latest_uses_source_specific_last_success(
+def test_refresh_raw_latest_scans_requested_range_for_each_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    last_success = {
-        "population": "202603",
-        "mover": None,
-    }
     calls: list[tuple[str, str, str]] = []
 
     monkeypatch.setattr(
         raw_orchestrator,
         "source_last_success_period",
-        lambda source_name, *, engine=None: last_success[source_name],
+        lambda source_name, *, engine=None: (_ for _ in ()).throw(
+            AssertionError("--latest should not start from last success")
+        ),
     )
 
     def fake_refresh_raw_range(
@@ -435,38 +440,63 @@ def test_refresh_raw_latest_uses_source_specific_last_success(
     )
 
     assert calls == [
-        ("population", "202604", "202605"),
+        ("population", "202501", "202605"),
         ("mover", "202501", "202605"),
     ]
     assert [result.source_name for result in results] == ["population", "mover"]
 
 
-def test_refresh_raw_latest_skips_up_to_date_source(
+def test_refresh_raw_latest_force_scans_requested_range(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    calls: list[tuple[str, str, str, bool]] = []
+
     monkeypatch.setattr(
         raw_orchestrator,
         "source_last_success_period",
-        lambda source_name, *, engine=None: "202606",
+        lambda source_name, *, engine=None: (_ for _ in ()).throw(
+            AssertionError("--latest force should not start from last success")
+        ),
     )
 
-    def fail_refresh_raw_range(*args, **kwargs):
-        raise AssertionError("up-to-date source should not be refreshed")
+    def fake_refresh_raw_range(
+        start_period,
+        end_period,
+        *,
+        sources=None,
+        engine=None,
+        force=False,
+        source_options=None,
+        downloaders=None,
+        writer=None,
+        continue_on_unavailable=True,
+    ):
+        calls.append((sources[0], start_period, end_period, force))
+        return (
+            raw_orchestrator.RawRefreshResult(
+                source_name=sources[0],
+                period=start_period,
+                status="downloaded_written",
+                row_count=1,
+            ),
+        )
 
     monkeypatch.setattr(
         raw_orchestrator,
         "refresh_raw_range",
-        fail_refresh_raw_range,
+        fake_refresh_raw_range,
     )
 
     results = raw_orchestrator.refresh_raw_latest(
         sources=("population",),
         engine=object(),
-        fallback_start_period="202501",
+        force=True,
+        fallback_start_period="202401",
         end_period="202606",
     )
 
-    assert results == ()
+    assert calls == [("population", "202401", "202606", True)]
+    assert [result.source_name for result in results] == ["population"]
 
 
 def test_refresh_raw_range_records_unavailable_periods_and_continues(

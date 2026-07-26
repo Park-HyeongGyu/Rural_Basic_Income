@@ -4,13 +4,17 @@ import hashlib
 import json
 from typing import Any, Mapping
 
-from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from sqlalchemy.exc import SQLAlchemyError
 
+from rural_basic_income.analysis.exceptions import AnalysisSpecError
 from rural_basic_income.analysis.specification import (
     analysis_request_to_payload,
     parse_analysis_request,
+)
+from rural_basic_income.worker.clean_orchestrator import (
+    CleanOrchestratorError,
+    clean_dataset_name_for_table,
+    fetch_clean_dataset_revision,
 )
 
 
@@ -19,27 +23,29 @@ RESULT_KEY_PREFIX = "rbi:analysis:result:"
 RUNNING_KEY_PREFIX = "rbi:analysis:running:"
 
 
-def fetch_data_revision(connection: Connection) -> str:
-    try:
-        result = connection.execute(
-            text(
-                """
-                SELECT
-                    count(*) AS success_count,
-                    coalesce(max(downloaded_at)::text, '') AS latest_success_at
-                FROM metadata.download_status
-                WHERE status = 1
-                """
-            )
-        ).mappings().one()
-    except SQLAlchemyError:
-        return "metadata.download_status:unavailable"
+class AnalysisDataRevisionError(RuntimeError):
+    """Raised when the analysis data revision cannot be resolved safely."""
 
-    return (
-        "metadata.download_status:"
-        f"{int(result['success_count'] or 0)}:"
-        f"{result['latest_success_at'] or ''}"
-    )
+
+def fetch_analysis_data_revision(
+    connection: Connection,
+    *,
+    outcome_table: str,
+) -> str:
+    try:
+        dataset_name = clean_dataset_name_for_table(outcome_table)
+    except CleanOrchestratorError as exc:
+        raise AnalysisSpecError(str(exc)) from exc
+
+    try:
+        revision = fetch_clean_dataset_revision(
+            connection,
+            dataset_name=dataset_name,
+        )
+    except CleanOrchestratorError as exc:
+        raise AnalysisDataRevisionError(str(exc)) from exc
+
+    return f"metadata.clean_dataset_revision:{dataset_name}:{revision}"
 
 
 def canonical_analysis_payload(

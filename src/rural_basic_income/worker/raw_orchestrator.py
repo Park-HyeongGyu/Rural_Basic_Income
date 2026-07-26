@@ -8,6 +8,7 @@ from typing import Any, Literal
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from rural_basic_income.config import Settings, get_settings
 from rural_basic_income.db.connection import get_engine
 from rural_basic_income.worker.download import (
     SourcePeriodDownload,
@@ -16,7 +17,6 @@ from rural_basic_income.worker.download import (
 from rural_basic_income.worker.periods import (
     current_month_period,
     iter_month_periods,
-    next_month_period,
     validate_period,
 )
 from rural_basic_income.worker import raw_writer
@@ -56,6 +56,13 @@ SOURCE_DOWNLOADERS: dict[str, DownloadFunction] = {
     "electricity": electricity.download_electricity,
     "local_currency": local_currency.download_local_currency,
 }
+
+
+def default_latest_start_period(settings: Settings | None = None) -> str:
+    return validate_period(
+        (settings or get_settings()).rbi_latest_start_period
+        or DEFAULT_LATEST_START_PERIOD
+    )
 
 
 class RawOrchestratorError(RuntimeError):
@@ -573,7 +580,7 @@ def refresh_raw_latest(
     sources: Sequence[str] | None = None,
     engine: Engine | None = None,
     force: bool = False,
-    fallback_start_period: str = DEFAULT_LATEST_START_PERIOD,
+    fallback_start_period: str | None = None,
     end_period: str | None = None,
     source_options: Mapping[str, Mapping[str, Any]] | None = None,
     downloaders: Mapping[str, DownloadFunction] | None = None,
@@ -583,7 +590,9 @@ def refresh_raw_latest(
     db_engine = engine or get_engine()
     resolved_sources = tuple(sources or DEFAULT_RAW_SOURCES)
     validated_end_period = validate_period(end_period or current_month_period())
-    validated_fallback = validate_period(fallback_start_period)
+    validated_fallback = validate_period(
+        fallback_start_period or default_latest_start_period()
+    )
     results: list[RawRefreshResult] = []
 
     LOGGER.info(
@@ -595,36 +604,17 @@ def refresh_raw_latest(
         force,
     )
     for source_name in resolved_sources:
-        last_success = None if force else source_last_success_period(
-            source_name,
-            engine=db_engine,
-        )
-        source_start = (
-            next_month_period(last_success)
-            if last_success is not None
-            else validated_fallback
-        )
-        if source_start > validated_end_period:
-            LOGGER.info(
-                "raw refresh latest skipped up-to-date source=%s "
-                "last_success=%s end_period=%s",
-                source_name,
-                last_success,
-                validated_end_period,
-            )
-            continue
-
         LOGGER.info(
             "raw refresh latest source range source=%s start_period=%s "
-            "end_period=%s last_success=%s",
+            "end_period=%s force=%s",
             source_name,
-            source_start,
+            validated_fallback,
             validated_end_period,
-            last_success,
+            force,
         )
         results.extend(
             refresh_raw_range(
-                source_start,
+                validated_fallback,
                 validated_end_period,
                 sources=(source_name,),
                 engine=db_engine,

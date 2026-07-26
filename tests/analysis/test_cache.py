@@ -4,6 +4,7 @@ import json
 
 from rural_basic_income.analysis.cache import (
     canonical_analysis_payload,
+    fetch_analysis_data_revision,
     make_analysis_cache_key,
     read_cached_result,
     result_cache_key,
@@ -22,6 +23,24 @@ class DictRedis:
     def setex(self, key: str, ttl: int, value: str) -> None:
         self.values[key] = value
         self.ttl_by_key[key] = ttl
+
+
+class ScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+class RevisionConnection:
+    def __init__(self, revisions: dict[str, int]) -> None:
+        self.revisions = revisions
+        self.calls: list[dict] = []
+
+    def execute(self, statement, parameters=None):
+        self.calls.append(dict(parameters or {}))
+        return ScalarResult(self.revisions.get(parameters["dataset_name"]))
 
 
 def make_payload() -> dict:
@@ -76,6 +95,42 @@ def test_cache_key_changes_when_data_revision_changes() -> None:
         payload,
         data_revision="rev-1",
     ) != make_analysis_cache_key(payload, data_revision="rev-2")
+
+
+def test_analysis_data_revision_uses_outcome_dataset_only() -> None:
+    connection = RevisionConnection({"population": 4, "electricity": 99})
+
+    revision = fetch_analysis_data_revision(
+        connection,
+        outcome_table="clean.clean_population_age",
+    )
+
+    assert revision == "metadata.clean_dataset_revision:population:4"
+    assert connection.calls == [{"dataset_name": "population"}]
+
+
+def test_unrelated_dataset_revision_does_not_change_cache_key() -> None:
+    payload = make_payload()
+    payload["outcome"]["table"] = "clean.clean_population"
+    payload["outcome"]["variable"] = "population"
+    payload["outcome"]["filters"] = {}
+
+    connection_a = RevisionConnection({"population": 7, "electricity": 1})
+    connection_b = RevisionConnection({"population": 7, "electricity": 2})
+    revision_a = fetch_analysis_data_revision(
+        connection_a,
+        outcome_table="clean.clean_population",
+    )
+    revision_b = fetch_analysis_data_revision(
+        connection_b,
+        outcome_table="clean.clean_population",
+    )
+
+    assert revision_a == revision_b
+    assert make_analysis_cache_key(
+        payload,
+        data_revision=revision_a,
+    ) == make_analysis_cache_key(payload, data_revision=revision_b)
 
 
 def test_canonical_payload_is_json_serializable() -> None:

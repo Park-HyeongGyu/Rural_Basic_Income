@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     analysis_rate_limit_window_seconds: int = 60
     export_csv_dir: str = "/export/csv"
     export_dta_dir: str = "/export/dta"
+    rbi_latest_start_period: str = "202501"
 
     @property
     def sqlalchemy_database_url(self) -> str:

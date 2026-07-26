@@ -17,18 +17,12 @@ from rural_basic_income.web.api import analysis as analysis_api
 from rural_basic_income.web.main import create_app
 
 
-DATA_REVISION = "metadata.download_status:2:2026-07-25 00:00:00+00"
+DATA_REVISION = "metadata.clean_dataset_revision:population:7"
 
 
-class MappingOneResult:
-    def mappings(self):
-        return self
-
-    def one(self):
-        return {
-            "success_count": 2,
-            "latest_success_at": "2026-07-25 00:00:00+00",
-        }
+class ScalarResult:
+    def scalar_one_or_none(self):
+        return 7
 
 
 class FakeConnection:
@@ -39,8 +33,9 @@ class FakeConnection:
         return None
 
     def execute(self, statement, parameters=None):
-        if "metadata.download_status" in str(statement):
-            return MappingOneResult()
+        if "metadata.clean_dataset_revision" in str(statement):
+            assert parameters == {"dataset_name": "population"}
+            return ScalarResult()
         raise AssertionError(f"unexpected SQL: {statement}")
 
 
@@ -156,7 +151,9 @@ def test_create_job_queues_task_and_sets_running_lock(monkeypatch) -> None:
 
     assert body["status"] == "queued"
     assert body["cached"] is False
-    assert queued == [(make_payload(), body["task_id"])]
+    queued_payload = dict(make_payload())
+    queued_payload["_claimed_cache_key"] = body["cache_key"]
+    assert queued == [(queued_payload, body["task_id"])]
     assert read_running_task_id(redis_client, body["cache_key"]) == body["task_id"]
 
 

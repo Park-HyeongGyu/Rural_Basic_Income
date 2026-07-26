@@ -8,9 +8,29 @@ import pytest
 from rural_basic_income.worker import clean_orchestrator
 
 
+class ResultStub:
+    def __init__(self, *, rowcount: int = -1, scalar_value: Any = None) -> None:
+        self.rowcount = rowcount
+        self.scalar_value = scalar_value
+
+    def scalar_one(self):
+        return self.scalar_value
+
+    def scalar_one_or_none(self):
+        return self.scalar_value
+
+
 class RecordingConnection:
-    def __init__(self, *, fail_on_statement: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on_statement: str | None = None,
+        rowcounts: dict[str, int] | None = None,
+        revision: int = 0,
+    ) -> None:
         self.fail_on_statement = fail_on_statement
+        self.rowcounts = rowcounts or {}
+        self.revision = revision
         self.calls: list[tuple[str, Any, Any]] = []
 
     def execution_options(self, **kwargs):
@@ -19,13 +39,19 @@ class RecordingConnection:
 
     def execute(self, statement, parameters=None):
         self.calls.append(("execute", str(statement), parameters))
-        return object()
+        sql = str(statement)
+        if "RETURNING revision" in sql:
+            self.revision += 1
+            return ResultStub(scalar_value=self.revision)
+        if "SELECT revision" in sql:
+            return ResultStub(scalar_value=self.revision)
+        return ResultStub()
 
     def exec_driver_sql(self, statement: str):
         self.calls.append(("exec_driver_sql", statement, None))
         if statement == self.fail_on_statement:
             raise RuntimeError("boom")
-        return object()
+        return ResultStub(rowcount=self.rowcounts.get(statement.strip(), -1))
 
 
 class RecordingConnectionContext:
@@ -149,6 +175,107 @@ def test_clean_dataset_specs_rejects_unknown_dataset() -> None:
         match="unknown clean dataset",
     ):
         clean_orchestrator.clean_dataset_specs(("not_a_dataset",))
+
+
+def test_run_clean_datasets_bumps_revision_when_clean_rows_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    electricity_sql = write_sql(
+        tmp_path / "electricity.sql",
+        "BEGIN; INSERT INTO clean.clean_electricity VALUES (1); COMMIT;",
+    )
+    specs = (
+        clean_orchestrator.CleanDatasetSpec(
+            "electricity",
+            electricity_sql,
+            ("clean_electricity",),
+        ),
+    )
+    connection = RecordingConnection(
+        rowcounts={"INSERT INTO clean.clean_electricity VALUES (1)": 3},
+    )
+
+    monkeypatch.setattr(clean_orchestrator, "CLEAN_DATASETS", specs)
+    monkeypatch.setattr(clean_orchestrator, "DEFAULT_CLEAN_DATASETS", ("electricity",))
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "load_clean_dependencies",
+        lambda connection: {"region_merge_key_rows": 2},
+    )
+
+    results = clean_orchestrator.run_clean_datasets(
+        ("electricity",),
+        engine=RecordingEngine(connection),
+    )
+
+    assert results[0].affected_row_count == 3
+    assert results[0].revision == 1
+    assert results[0].revision_changed is True
+
+    sql_calls = [
+        call[1]
+        for call in connection.calls
+        if call[0] == "exec_driver_sql"
+    ]
+    bump_index = next(
+        index
+        for index, call in enumerate(connection.calls)
+        if call[0] == "execute" and "RETURNING revision" in call[1]
+    )
+    commit_index = next(
+        index
+        for index, call in enumerate(connection.calls)
+        if call[0] == "exec_driver_sql" and call[1] == "COMMIT"
+    )
+    assert bump_index < commit_index
+    assert sql_calls == [
+        "BEGIN",
+        "INSERT INTO clean.clean_electricity VALUES (1)",
+        "COMMIT",
+    ]
+
+
+def test_run_clean_datasets_does_not_bump_revision_on_noop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    electricity_sql = write_sql(
+        tmp_path / "electricity.sql",
+        "BEGIN; INSERT INTO clean.clean_electricity VALUES (1); COMMIT;",
+    )
+    specs = (
+        clean_orchestrator.CleanDatasetSpec(
+            "electricity",
+            electricity_sql,
+            ("clean_electricity",),
+        ),
+    )
+    connection = RecordingConnection(
+        rowcounts={"INSERT INTO clean.clean_electricity VALUES (1)": 0},
+        revision=5,
+    )
+
+    monkeypatch.setattr(clean_orchestrator, "CLEAN_DATASETS", specs)
+    monkeypatch.setattr(clean_orchestrator, "DEFAULT_CLEAN_DATASETS", ("electricity",))
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "load_clean_dependencies",
+        lambda connection: {"region_merge_key_rows": 2},
+    )
+
+    results = clean_orchestrator.run_clean_datasets(
+        ("electricity",),
+        engine=RecordingEngine(connection),
+    )
+
+    assert results[0].affected_row_count == 0
+    assert results[0].revision == 5
+    assert results[0].revision_changed is False
+    assert not any(
+        call[0] == "execute" and "RETURNING revision" in call[1]
+        for call in connection.calls
+    )
 
 
 def test_run_clean_datasets_rebuild_deletes_periods_inside_sql_transaction(
