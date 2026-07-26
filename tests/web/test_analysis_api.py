@@ -48,6 +48,9 @@ class FakeEngine:
     def connect(self):
         return FakeConnection()
 
+    def begin(self):
+        return FakeConnection()
+
 
 class DictRedis:
     def __init__(self) -> None:
@@ -253,6 +256,8 @@ def test_get_analysis_job_reports_success_metadata(monkeypatch) -> None:
         "status": "SUCCESS",
         "cache_key": "abc",
         "cached": False,
+        "data_revision": None,
+        "analysis_version": None,
         "result_url": "/api/analysis/results/abc",
         "result_available": True,
     }
@@ -308,3 +313,53 @@ def test_analysis_routes_are_registered() -> None:
     assert "/api/analysis/jobs/{task_id}" in paths
     assert "/api/analysis/results/{cache_key}" in paths
     assert "/api/analysis/options" in paths
+    assert "/api/analysis/saved" in paths
+    assert "/api/analysis/saved/{saved_id}" in paths
+
+
+def test_list_saved_analysis_items(monkeypatch) -> None:
+    redis_client = DictRedis()
+    install_common_fakes(monkeypatch, redis_client)
+    monkeypatch.setattr(
+        analysis_api,
+        "list_saved_analyses",
+        lambda _connection: (
+            {
+                "id": "saved-1",
+                "title": "인구 follow up",
+                "summary": {"outcome_variable": "population"},
+            },
+        ),
+    )
+
+    body = analysis_api.list_saved_analysis_items()
+
+    assert body["saved"][0]["title"] == "인구 follow up"
+
+
+def test_create_saved_analysis_item(monkeypatch) -> None:
+    redis_client = DictRedis()
+    install_common_fakes(monkeypatch, redis_client)
+    calls = []
+
+    def fake_create(_connection, payload):
+        calls.append(payload)
+        return {"id": "saved-1", "title": payload["title"]}
+
+    monkeypatch.setattr(analysis_api, "create_saved_analysis", fake_create)
+
+    body = analysis_api.create_saved_analysis_item({"title": "저장"})
+
+    assert calls == [{"title": "저장"}]
+    assert body["saved"]["id"] == "saved-1"
+
+
+def test_get_saved_analysis_item_returns_404(monkeypatch) -> None:
+    redis_client = DictRedis()
+    install_common_fakes(monkeypatch, redis_client)
+    monkeypatch.setattr(analysis_api, "get_saved_analysis", lambda *_args: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        analysis_api.get_saved_analysis_item("00000000-0000-0000-0000-000000000001")
+
+    assert exc_info.value.status_code == 404

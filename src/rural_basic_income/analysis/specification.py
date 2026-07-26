@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -59,11 +60,22 @@ def require_mapping(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return value
 
 
-def optional_mapping(payload: Mapping[str, Any], key: str) -> dict[str, str]:
+def optional_mapping(payload: Mapping[str, Any], key: str) -> dict[str, str | list[str]]:
     value = payload.get(key, {})
     if not isinstance(value, Mapping):
         raise AnalysisSpecError(f"{key} must be an object")
-    return {str(item_key): str(item_value) for item_key, item_value in value.items()}
+    return {
+        str(item_key): normalize_filter_payload_value(item_value)
+        for item_key, item_value in value.items()
+    }
+
+
+def normalize_filter_payload_value(value: Any) -> str | list[str]:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Sequence):
+        return [str(item) for item in value]
+    return str(value)
 
 
 def require_sequence(payload: Mapping[str, Any], key: str) -> list[Any]:
@@ -103,11 +115,15 @@ def parse_control(value: Any) -> ControlRegion:
 
 
 def analysis_request_to_payload(request: AnalysisRequest) -> dict[str, Any]:
+    filters = {
+        key: values[0] if len(values) == 1 else list(values)
+        for key, values in sorted(request.outcome.filters.items())
+    }
     return {
         "outcome": {
             "table": request.outcome.table,
             "variable": request.outcome.variable,
-            "filters": dict(sorted(request.outcome.filters.items())),
+            "filters": filters,
         },
         "period": {
             "start": request.spec.period.start_period,

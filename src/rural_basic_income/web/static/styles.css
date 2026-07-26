@@ -165,6 +165,11 @@ h2 {
   display: none;
 }
 
+.filter-checkset {
+  display: grid;
+  gap: 6px;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -225,10 +230,23 @@ button:focus-visible {
   border-color: var(--accent);
 }
 
+.text-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .variable-list {
   display: grid;
   gap: 8px;
   margin-top: 10px;
+}
+
+.filter-checkbox-list {
+  display: grid;
+  gap: 6px;
+  max-height: 184px;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .variable-option {
@@ -256,6 +274,11 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+.filter-checkbox-option {
+  min-height: 30px;
+  padding: 5px 8px;
+}
+
 .chart-surface {
   min-width: 0;
   padding: 16px;
@@ -267,6 +290,13 @@ button:focus-visible {
 
 .chart-kicker {
   margin: 0 0 4px;
+}
+
+.chart-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 #refresh-button {
@@ -382,10 +412,66 @@ button:focus-visible {
   padding: 20px 32px 32px;
 }
 
+.saved-analysis-layout {
+  padding: 20px 32px 32px;
+}
+
 .analysis-controls,
-.analysis-results {
+.analysis-results,
+.saved-analysis-section {
   min-width: 0;
   padding: 16px;
+}
+
+.saved-analysis-section {
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.saved-analysis-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.saved-analysis-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.saved-analysis-card h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.saved-analysis-meta,
+.saved-analysis-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.saved-analysis-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.saved-analysis-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
 }
 
 .analysis-form-grid {
@@ -820,7 +906,8 @@ button:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .analysis-layout {
+  .analysis-layout,
+  .saved-analysis-layout {
     padding: 16px;
   }
 

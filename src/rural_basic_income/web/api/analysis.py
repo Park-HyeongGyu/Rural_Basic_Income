@@ -20,6 +20,14 @@ from rural_basic_income.analysis.cache import (
     read_running_task_id,
 )
 from rural_basic_income.analysis.exceptions import AnalysisSpecError
+from rural_basic_income.analysis.saved import (
+    SavedAnalysisError,
+    create_saved_analysis,
+    delete_saved_analysis,
+    get_saved_analysis,
+    list_saved_analyses,
+    update_saved_analysis,
+)
 from rural_basic_income.analysis.tasks import create_redis_client, run_analysis_task
 from rural_basic_income.config import get_settings
 from rural_basic_income.db.connection import get_engine
@@ -196,6 +204,8 @@ def get_analysis_job(task_id: str) -> dict[str, Any]:
                 {
                     "cache_key": result.get("cache_key"),
                     "cached": result.get("cached", False),
+                    "data_revision": result.get("data_revision"),
+                    "analysis_version": result.get("analysis_version"),
                     "result_url": result.get("result_url"),
                     "result_available": result.get("cache_key") is not None,
                 }
@@ -231,6 +241,7 @@ def get_analysis_result(cache_key: str) -> dict[str, Any]:
         "status": "success",
         "cached": True,
         "cache_key": cache_key,
+        "data_revision": None,
         "analysis_version": ANALYSIS_VERSION,
         "result": result,
     }
@@ -268,3 +279,108 @@ def analysis_options() -> dict[str, Any]:
             "window_seconds": get_settings().analysis_rate_limit_window_seconds,
         },
     }
+
+
+@router.get("/saved")
+def list_saved_analysis_items() -> dict[str, Any]:
+    try:
+        with get_engine().connect() as connection:
+            saved = list_saved_analyses(connection)
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    return {"saved": list(saved)}
+
+
+@router.post("/saved", status_code=status.HTTP_201_CREATED)
+def create_saved_analysis_item(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        with get_engine().begin() as connection:
+            saved = create_saved_analysis(connection, payload)
+    except SavedAnalysisError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc)},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    return {"saved": saved}
+
+
+@router.get("/saved/{saved_id}")
+def get_saved_analysis_item(saved_id: str) -> dict[str, Any]:
+    try:
+        with get_engine().connect() as connection:
+            saved = get_saved_analysis(connection, saved_id)
+    except SavedAnalysisError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc)},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    if saved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="saved analysis not found",
+        )
+    return {"saved": saved}
+
+
+@router.patch("/saved/{saved_id}")
+def update_saved_analysis_item(saved_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        with get_engine().begin() as connection:
+            saved = update_saved_analysis(connection, saved_id, payload)
+    except SavedAnalysisError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc)},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    if saved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="saved analysis not found",
+        )
+    return {"saved": saved}
+
+
+@router.delete("/saved/{saved_id}")
+def delete_saved_analysis_item(saved_id: str) -> dict[str, Any]:
+    try:
+        with get_engine().begin() as connection:
+            deleted = delete_saved_analysis(connection, saved_id)
+    except SavedAnalysisError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc)},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="saved analysis not found",
+        )
+    return {"status": "deleted", "id": saved_id}

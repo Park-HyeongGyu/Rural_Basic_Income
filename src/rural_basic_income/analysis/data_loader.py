@@ -227,12 +227,13 @@ def validate_outcome(
         )
 
     invalid_filter_values = []
-    for filter_name, filter_value in outcome.filters.items():
+    for filter_name, filter_values in outcome.filters.items():
         allowed_values = available_filters[filter_name].values
-        if filter_value not in allowed_values:
-            invalid_filter_values.append(
-                f"{filter_name}={filter_value} allowed={list(allowed_values)}"
-            )
+        for filter_value in filter_values:
+            if filter_value not in allowed_values:
+                invalid_filter_values.append(
+                    f"{filter_name}={filter_value} allowed={list(allowed_values)}"
+                )
     if invalid_filter_values:
         raise AnalysisSpecError(
             "outcome filter values are not selectable: "
@@ -288,10 +289,21 @@ def fetch_analysis_rows(
         params[sigungu_param] = region.region_sigungu
     where_clauses.append("(" + " OR ".join(region_clauses) + ")")
 
-    for filter_name, filter_value in outcome.filters.items():
-        param_name = f"filter_{filter_name}"
-        where_clauses.append(f"{quote_identifier(filter_name)} = :{param_name}")
-        params[param_name] = filter_value
+    for filter_name, filter_values in outcome.filters.items():
+        if len(filter_values) == 1:
+            param_name = f"filter_{filter_name}"
+            where_clauses.append(f"{quote_identifier(filter_name)} = :{param_name}")
+            params[param_name] = filter_values[0]
+            continue
+
+        param_names = []
+        for index, filter_value in enumerate(filter_values):
+            param_name = f"filter_{filter_name}_{index}"
+            param_names.append(f":{param_name}")
+            params[param_name] = filter_value
+        where_clauses.append(
+            f"{quote_identifier(filter_name)} IN ({', '.join(param_names)})"
+        )
 
     statement = text(
         f"""
@@ -299,9 +311,10 @@ def fetch_analysis_rows(
             date,
             region_sido,
             region_sigungu,
-            {quote_identifier(outcome.variable)} AS raw_value
+            SUM({quote_identifier(outcome.variable)}) AS raw_value
         FROM {qualified_table_name(outcome.table)}
         WHERE {' AND '.join(where_clauses)}
+        GROUP BY date, region_sido, region_sigungu
         ORDER BY region_sido, region_sigungu, date
         """
     )

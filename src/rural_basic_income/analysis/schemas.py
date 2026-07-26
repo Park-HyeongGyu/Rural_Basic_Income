@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Any, Mapping
 
 from rural_basic_income.analysis.exceptions import AnalysisSpecError
 from rural_basic_income.worker.periods import iter_month_periods, validate_period
@@ -14,7 +15,7 @@ CLEAN_SCHEMA = "clean"
 class AnalysisOutcome:
     table: str
     variable: str
-    filters: Mapping[str, str] = field(default_factory=dict)
+    filters: Mapping[str, str | Sequence[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         table = self.table.strip()
@@ -32,7 +33,7 @@ class AnalysisOutcome:
             raise AnalysisSpecError("outcome variable must not be empty")
 
         filters = {
-            str(key).strip(): str(value).strip()
+            str(key).strip(): normalize_filter_values(value)
             for key, value in self.filters.items()
         }
         empty_filter_keys = [key for key in filters if not key]
@@ -188,3 +189,19 @@ def duplicated_regions(regions: list[RegionKey]) -> list[RegionKey]:
             duplicates.add(region)
         seen.add(region)
     return sorted(duplicates)
+
+
+def normalize_filter_values(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = (value,)
+    elif isinstance(value, Sequence):
+        values = tuple(str(item) for item in value)
+    else:
+        values = (str(value),)
+
+    normalized = tuple(
+        item.strip()
+        for item in values
+        if item is not None and str(item).strip()
+    )
+    return normalized

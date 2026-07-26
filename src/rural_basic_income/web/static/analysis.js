@@ -6,6 +6,14 @@
     selectedFilters: new Map(),
     mapSelector: null,
     pollTimer: null,
+    pendingPayload: null,
+    lastPayload: null,
+    lastResult: null,
+    lastResultMeta: {},
+    loadedSavedAnalysisId: null,
+    loadedSavedAnalysisTitle: "",
+    savedAnalyses: [],
+    savedLoaded: false,
   };
 
   const els = {
@@ -26,6 +34,8 @@
     addControl: document.getElementById("add-control-region"),
     run: document.getElementById("analysis-run-button"),
     rerun: document.getElementById("analysis-rerun-button"),
+    save: document.getElementById("analysis-save-button"),
+    updateSave: document.getElementById("analysis-update-save-button"),
     optionsStatus: document.getElementById("analysis-options-status"),
     status: document.getElementById("analysis-status-line"),
     badge: document.getElementById("analysis-result-badge"),
@@ -36,7 +46,12 @@
     warnings: document.getElementById("analysis-warning-list"),
     chart: document.getElementById("event-study-chart"),
     eventBody: document.getElementById("event-study-body"),
+    savedRefresh: document.getElementById("saved-analysis-refresh"),
+    savedStatus: document.getElementById("saved-analysis-status"),
+    savedList: document.getElementById("saved-analysis-list"),
   };
+
+  const MULTI_FILTER_NAMES = new Set(["age", "sex"]);
 
   function apiJson(url, options = {}) {
     const requestOptions = {
@@ -87,6 +102,63 @@
     });
   }
 
+  function cloneJson(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function payloadWithoutForce(payload) {
+    const copy = cloneJson(payload);
+    delete copy.force;
+    return copy;
+  }
+
+  function setSelectIfAvailable(select, value) {
+    if (!value) {
+      return false;
+    }
+    const stringValue = String(value);
+    const option = [...select.options].find((item) => item.value === stringValue);
+    if (!option) {
+      return false;
+    }
+    select.value = stringValue;
+    return true;
+  }
+
+  function isMultiFilter(filter) {
+    return MULTI_FILTER_NAMES.has(filter.name);
+  }
+
+  function normalizeFilterValues(value, allowedValues, fallbackValues) {
+    const rawValues = Array.isArray(value)
+      ? value
+      : value === undefined || value === null || value === ""
+        ? []
+        : [value];
+    const values = rawValues
+      .map((item) => String(item))
+      .filter((item) => allowedValues.has(item));
+    return values.length ? values : fallbackValues;
+  }
+
+  function normalizeSavedTableValue(value) {
+    if (!state.options || !value) {
+      return value;
+    }
+    const raw = String(value);
+    if (state.options.tables.some((table) => table.table_name === raw)) {
+      return raw;
+    }
+    if (raw.startsWith("clean.")) {
+      const unqualified = raw.slice("clean.".length);
+      if (state.options.tables.some((table) => table.table_name === unqualified)) {
+        return unqualified;
+      }
+    }
+    const byDisplayName = state.options.tables.find((table) => table.table === raw);
+    return byDisplayName ? byDisplayName.table_name : raw;
+  }
+
   function regionId(region) {
     return `${region.region_sido}::${region.region_sigungu}`;
   }
@@ -126,6 +198,32 @@
     els.rerun.disabled = isBusy;
     els.addTreatment.disabled = isBusy;
     els.addControl.disabled = isBusy;
+    if (isBusy) {
+      els.save.disabled = true;
+      els.updateSave.disabled = true;
+    } else {
+      updateSaveButtons();
+    }
+  }
+
+  function updateSaveButtons() {
+    const hasResult = Boolean(state.lastResult);
+    els.save.disabled = !hasResult;
+    els.updateSave.disabled = !hasResult || !state.loadedSavedAnalysisId;
+    els.updateSave.classList.toggle("is-hidden", !state.loadedSavedAnalysisId);
+  }
+
+  function markAnalysisDirty(message = "조건이 변경되었습니다. 다시 분석하세요") {
+    if (!state.lastResult && !state.pendingPayload) {
+      return;
+    }
+    state.pendingPayload = null;
+    state.lastResult = null;
+    state.lastResultMeta = {};
+    state.lastPayload = null;
+    updateSaveButtons();
+    setBadge("changed", "warning");
+    setAnalysisStatus(message);
   }
 
   function fillSelect(select, options, valueGetter, labelGetter, preferredValue) {
@@ -263,20 +361,61 @@
         continue;
       }
 
-      const label = document.createElement("label");
-      label.className = "field filter-field";
-
       const text = document.createElement("span");
       text.textContent = filter.label || filter.name;
 
-      const select = document.createElement("select");
       const allowed = new Set(filter.values.map((item) => item.value));
       const previousValue = previous.get(filter.name);
-      const preferred = allowed.has(previousValue)
-        ? previousValue
-        : allowed.has("all")
-          ? "all"
-          : filter.values[0].value;
+
+      if (isMultiFilter(filter)) {
+        const group = document.createElement("div");
+        group.className = "filter-checkset";
+        const fallbackValues = [
+          allowed.has("all") ? "all" : filter.values[0].value,
+        ].filter(Boolean);
+        const preferredValues = normalizeFilterValues(
+          previousValue,
+          allowed,
+          fallbackValues,
+        );
+        const selectedValues = new Set(preferredValues);
+        const options = document.createElement("div");
+        options.className = "filter-checkbox-list";
+
+        for (const item of filter.values) {
+          const optionLabel = document.createElement("label");
+          optionLabel.className = "variable-option filter-checkbox-option";
+
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.value = item.value;
+          input.checked = selectedValues.has(item.value);
+          input.addEventListener("change", () => {
+            const values = [...options.querySelectorAll("input[type='checkbox']")]
+              .filter((checkbox) => checkbox.checked)
+              .map((checkbox) => checkbox.value);
+            state.selectedFilters.set(filter.name, values);
+            markAnalysisDirty();
+          });
+
+          const optionText = document.createElement("span");
+          optionText.textContent = item.label || item.value;
+          optionLabel.append(input, optionText);
+          options.append(optionLabel);
+        }
+
+        state.selectedFilters.set(filter.name, preferredValues);
+        group.append(text, options);
+        els.filters.append(group);
+        continue;
+      }
+
+      const label = document.createElement("label");
+      label.className = "field filter-field";
+      const select = document.createElement("select");
+      const previousValues = normalizeFilterValues(previousValue, allowed, []);
+      const preferred = previousValues[0]
+        || (allowed.has("all") ? "all" : filter.values[0].value);
 
       fillSelect(
         select,
@@ -288,6 +427,7 @@
       state.selectedFilters.set(filter.name, select.value);
       select.addEventListener("change", () => {
         state.selectedFilters.set(filter.name, select.value);
+        markAnalysisDirty();
       });
 
       label.append(text, select);
@@ -398,6 +538,7 @@
       treatment_period: options.treatmentPeriod || els.treatmentPeriod.value,
     });
     renderSelectedRegions();
+    markAnalysisDirty();
     setAnalysisStatus("처리지역을 추가했습니다");
     return true;
   }
@@ -426,6 +567,7 @@
     }
     state.controls.push({ ...region });
     renderSelectedRegions();
+    markAnalysisDirty();
     setAnalysisStatus("비교지역을 추가했습니다");
     return true;
   }
@@ -444,6 +586,7 @@
       return false;
     }
     renderSelectedRegions();
+    markAnalysisDirty();
     setAnalysisStatus("지역 선택을 해제했습니다");
     return true;
   }
@@ -498,6 +641,7 @@
       remove.addEventListener("click", () => {
         state.treatments.splice(index, 1);
         renderSelectedRegions();
+        markAnalysisDirty();
       });
 
       item.append(name, periodSelect, remove);
@@ -525,6 +669,7 @@
       remove.addEventListener("click", () => {
         state.controls.splice(index, 1);
         renderSelectedRegions();
+        markAnalysisDirty();
       });
 
       item.append(name, remove);
@@ -542,7 +687,7 @@
   function buildPayload(force = false) {
     const filters = {};
     for (const [name, value] of state.selectedFilters.entries()) {
-      filters[name] = value;
+      filters[name] = Array.isArray(value) ? [...value] : value;
     }
     return {
       outcome: {
@@ -598,6 +743,7 @@
     }
 
     setBusy(true);
+    state.pendingPayload = payloadWithoutForce(payload);
     setBadge(force ? "reanalyze" : "requesting", "muted");
     setAnalysisStatus(force ? "캐시를 무시하고 분석을 요청하는 중" : "분석을 요청하는 중");
 
@@ -610,6 +756,8 @@
         renderAnalysisResult(response.result, {
           cached: Boolean(response.cached),
           cacheKey: response.cache_key,
+          dataRevision: response.data_revision,
+          analysisVersion: response.analysis_version,
         });
         return;
       }
@@ -641,6 +789,8 @@
           renderAnalysisResult(resultPayload.result, {
             cached: Boolean(job.cached || resultPayload.cached),
             cacheKey: job.cache_key || resultPayload.cache_key,
+            dataRevision: job.data_revision || resultPayload.data_revision,
+            analysisVersion: job.analysis_version || resultPayload.analysis_version,
           });
           return;
         }
@@ -674,6 +824,10 @@
     const coefficient = result.twfe?.coefficient || {};
     const diagnostics = result.diagnostics || {};
     const eventStudy = result.event_study || {};
+    state.lastResult = result;
+    state.lastPayload = result.request || state.pendingPayload || null;
+    state.lastResultMeta = { ...meta };
+    state.pendingPayload = null;
 
     els.twfeEstimate.textContent = formatEstimate(coefficient.estimate);
     els.twfeStandardError.textContent = formatEstimate(coefficient.standard_error);
@@ -684,13 +838,22 @@
       result.twfe?.n_regions || diagnostics.n_regions,
     );
 
-    setBadge(meta.cached ? "cache hit" : "fresh result", meta.cached ? "success" : "muted");
+    if (meta.saved) {
+      setBadge("saved", "success");
+    } else {
+      setBadge(meta.cached ? "cache hit" : "fresh result", meta.cached ? "success" : "muted");
+    }
     setAnalysisStatus(
-      meta.cacheKey ? `결과 cache key: ${meta.cacheKey.slice(0, 12)}` : "분석 완료",
+      meta.saved
+        ? "저장된 분석을 불러왔습니다"
+        : meta.cacheKey
+          ? `결과 cache key: ${meta.cacheKey.slice(0, 12)}`
+          : "분석 완료",
     );
     renderWarnings(result.warnings || []);
     renderEventStudyChart(eventStudy.points || []);
     renderEventStudyTable(eventStudy.points || []);
+    updateSaveButtons();
   }
 
   function renderWarnings(warnings) {
@@ -829,6 +992,270 @@
     return td;
   }
 
+  function buildSaveTitle() {
+    const payload = state.lastPayload || state.lastResult?.request || buildPayload(false);
+    const outcome = payload.outcome || {};
+    const period = payload.period || {};
+    const treatment = payload.treatments?.[0];
+    const regionName = treatment
+      ? `${treatment.region_sido} ${treatment.region_sigungu}`
+      : "분석";
+    return `${outcome.variable || "analysis"} ${regionName} ${formatPeriod(period.start)}-${formatPeriod(period.end)}`;
+  }
+
+  function buildSaveBody(title) {
+    if (!state.lastResult) {
+      throw new Error("저장할 분석 결과가 없습니다");
+    }
+    const requestPayload = state.lastPayload || state.lastResult.request;
+    if (!requestPayload) {
+      throw new Error("분석 조건을 찾을 수 없습니다");
+    }
+    return {
+      title,
+      request_payload: requestPayload,
+      result_payload: state.lastResult,
+      cache_key: state.lastResultMeta.cacheKey || null,
+      data_revision: state.lastResultMeta.dataRevision || null,
+      analysis_version: state.lastResultMeta.analysisVersion || null,
+    };
+  }
+
+  async function saveCurrentAnalysis({ update = false } = {}) {
+    if (!state.lastResult) {
+      setAnalysisStatus("저장할 분석 결과가 없습니다", true);
+      return;
+    }
+    let title = state.loadedSavedAnalysisTitle || buildSaveTitle();
+    if (!update) {
+      const enteredTitle = window.prompt("저장 이름", title);
+      if (enteredTitle === null) {
+        return;
+      }
+      title = enteredTitle.trim() || title;
+    }
+
+    const targetUrl =
+      update && state.loadedSavedAnalysisId
+        ? `/api/analysis/saved/${encodeURIComponent(state.loadedSavedAnalysisId)}`
+        : "/api/analysis/saved";
+    const method = update && state.loadedSavedAnalysisId ? "PATCH" : "POST";
+
+    els.save.disabled = true;
+    els.updateSave.disabled = true;
+    try {
+      const response = await apiJson(targetUrl, {
+        method,
+        body: JSON.stringify(buildSaveBody(title)),
+      });
+      const saved = response.saved;
+      state.loadedSavedAnalysisId = saved.id;
+      state.loadedSavedAnalysisTitle = saved.title;
+      state.savedLoaded = false;
+      updateSaveButtons();
+      setBadge("saved", "success");
+      setAnalysisStatus(update ? "저장된 분석을 업데이트했습니다" : "분석을 저장했습니다");
+    } catch (error) {
+      updateSaveButtons();
+      setAnalysisStatus(error.message, true);
+    }
+  }
+
+  function formatSavedTime(value) {
+    if (!value) {
+      return "-";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return new Intl.DateTimeFormat("ko-KR", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  }
+
+  function savedSummaryText(saved) {
+    const summary = saved.summary || {};
+    const treatment = summary.first_treatment;
+    const region = treatment
+      ? `${treatment.region_sido} ${treatment.region_sigungu}`
+      : "처리지역 없음";
+    return [
+      `${summary.outcome_table || "-"} / ${summary.outcome_variable || "-"}`,
+      `${formatPeriod(summary.start_period)} - ${formatPeriod(summary.end_period)}`,
+      `${region} 외 처리 ${formatNumber(summary.treatment_count)} / 비교 ${formatNumber(summary.control_count)}`,
+    ].join(" · ");
+  }
+
+  function renderSavedAnalyses() {
+    els.savedList.replaceChildren();
+    if (!state.savedAnalyses.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "저장된 분석 없음";
+      els.savedList.append(empty);
+      return;
+    }
+
+    for (const saved of state.savedAnalyses) {
+      const card = document.createElement("article");
+      card.className = "saved-analysis-card";
+
+      const title = document.createElement("h3");
+      title.textContent = saved.title;
+
+      const summary = document.createElement("p");
+      summary.className = "saved-analysis-summary";
+      summary.textContent = savedSummaryText(saved);
+
+      const meta = document.createElement("p");
+      meta.className = "saved-analysis-meta";
+      meta.textContent = `수정 ${formatSavedTime(saved.updated_at)}`;
+
+      const tags = document.createElement("div");
+      tags.className = "saved-analysis-tags";
+      const estimate = saved.summary?.estimate;
+      const se = saved.summary?.standard_error;
+      for (const label of [
+        `estimate ${formatEstimate(estimate)}`,
+        `se ${formatEstimate(se)}`,
+        saved.analysis_version || "analysis",
+      ]) {
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = label;
+        tags.append(tag);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "saved-analysis-actions";
+
+      const load = document.createElement("button");
+      load.type = "button";
+      load.className = "text-button";
+      load.textContent = "불러오기";
+      load.addEventListener("click", () => openSavedAnalysis(saved.id));
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "text-button danger-button";
+      remove.textContent = "삭제";
+      remove.addEventListener("click", () => deleteSavedAnalysis(saved.id, saved.title));
+
+      actions.append(load, remove);
+      card.append(title, summary, meta, tags, actions);
+      els.savedList.append(card);
+    }
+  }
+
+  async function loadSavedAnalyses({ force = false } = {}) {
+    if (state.savedLoaded && !force) {
+      renderSavedAnalyses();
+      return;
+    }
+    els.savedStatus.textContent = "저장된 분석을 불러오는 중";
+    els.savedStatus.classList.remove("error");
+    try {
+      const response = await apiJson("/api/analysis/saved");
+      state.savedAnalyses = response.saved || [];
+      state.savedLoaded = true;
+      els.savedStatus.textContent = `${state.savedAnalyses.length}개 저장됨`;
+      renderSavedAnalyses();
+    } catch (error) {
+      els.savedStatus.textContent = error.message;
+      els.savedStatus.classList.add("error");
+      els.savedList.replaceChildren();
+    }
+  }
+
+  function applyAnalysisPayload(payload) {
+    const outcome = payload.outcome || {};
+    const period = payload.period || {};
+    setSelectIfAvailable(els.table, normalizeSavedTableValue(outcome.table));
+    state.selectedFilters = new Map(Object.entries(outcome.filters || {}));
+    populateOutcomeControls();
+    setSelectIfAvailable(els.variable, outcome.variable);
+    setSelectIfAvailable(els.startPeriod, period.start);
+    setSelectIfAvailable(els.endPeriod, period.end);
+    setSelectIfAvailable(els.basePeriod, period.normalization_base);
+    ensurePeriodOrder();
+    syncTreatmentPeriodChoices();
+
+    state.treatments = (payload.treatments || [])
+      .map((item) => {
+        const region = findRegion(item);
+        return region ? { ...region, treatment_period: item.treatment_period } : null;
+      })
+      .filter(Boolean);
+    state.controls = (payload.controls || [])
+      .map((item) => findRegion(item))
+      .filter(Boolean)
+      .map((item) => ({ ...item }));
+    renderSelectedRegions();
+  }
+
+  async function openSavedAnalysis(savedId) {
+    els.savedStatus.textContent = "저장된 분석을 불러오는 중";
+    try {
+      const response = await apiJson(`/api/analysis/saved/${encodeURIComponent(savedId)}`);
+      const saved = response.saved;
+      applyAnalysisPayload(saved.request_payload);
+      state.loadedSavedAnalysisId = saved.id;
+      state.loadedSavedAnalysisTitle = saved.title;
+      state.lastPayload = saved.request_payload;
+      renderAnalysisResult(saved.result_payload, {
+        saved: true,
+        cached: true,
+        cacheKey: saved.cache_key,
+        dataRevision: saved.data_revision,
+        analysisVersion: saved.analysis_version,
+      });
+      activateView("analysis-view");
+      window.history.replaceState(null, "", "#analysis");
+    } catch (error) {
+      els.savedStatus.textContent = error.message;
+      els.savedStatus.classList.add("error");
+    }
+  }
+
+  async function deleteSavedAnalysis(savedId, title) {
+    if (!window.confirm(`"${title}" 저장본을 삭제할까요?`)) {
+      return;
+    }
+    try {
+      await apiJson(`/api/analysis/saved/${encodeURIComponent(savedId)}`, {
+        method: "DELETE",
+      });
+      state.savedLoaded = false;
+      if (state.loadedSavedAnalysisId === savedId) {
+        state.loadedSavedAnalysisId = null;
+        state.loadedSavedAnalysisTitle = "";
+        updateSaveButtons();
+      }
+      await loadSavedAnalyses({ force: true });
+    } catch (error) {
+      els.savedStatus.textContent = error.message;
+      els.savedStatus.classList.add("error");
+    }
+  }
+
+  function hashForView(viewTarget) {
+    if (viewTarget === "analysis-view") {
+      return "#analysis";
+    }
+    if (viewTarget === "saved-analysis-view") {
+      return "#saved-analysis";
+    }
+    if (viewTarget === "saved-indicator-view") {
+      return "#saved-indicator";
+    }
+    return "#dashboard";
+  }
+
   function activateView(viewTarget) {
     document.querySelectorAll(".tab-button").forEach((item) => {
       item.classList.toggle("is-active", item.dataset.viewTarget === viewTarget);
@@ -839,6 +1266,14 @@
     if (viewTarget === "analysis-view" && state.options) {
       Plotly.Plots.resize(els.chart);
     }
+    if (viewTarget === "saved-analysis-view") {
+      loadSavedAnalyses();
+    }
+    window.dispatchEvent(
+      new CustomEvent("rbi:viewchange", {
+        detail: { viewTarget },
+      }),
+    );
   }
 
   function initMapSelector() {
@@ -875,24 +1310,29 @@
     document.querySelectorAll(".tab-button").forEach((button) => {
       button.addEventListener("click", () => {
         activateView(button.dataset.viewTarget);
-        window.history.replaceState(
-          null,
-          "",
-          button.dataset.viewTarget === "analysis-view" ? "#analysis" : "#dashboard",
-        );
+        window.history.replaceState(null, "", hashForView(button.dataset.viewTarget));
       });
     });
 
     els.table.addEventListener("change", () => {
       populateOutcomeControls();
+      markAnalysisDirty();
+    });
+    els.variable.addEventListener("change", () => {
+      markAnalysisDirty();
     });
     els.startPeriod.addEventListener("change", () => {
       ensurePeriodOrder();
       syncTreatmentPeriodChoices();
+      markAnalysisDirty();
     });
     els.endPeriod.addEventListener("change", () => {
       ensurePeriodOrder();
       syncTreatmentPeriodChoices();
+      markAnalysisDirty();
+    });
+    els.basePeriod.addEventListener("change", () => {
+      markAnalysisDirty();
     });
     els.treatmentSido.addEventListener("change", () => {
       populateSigunguPicker(els.treatmentSido, els.treatmentSigungu);
@@ -904,6 +1344,9 @@
     els.addControl.addEventListener("click", () => addControlRegion());
     els.run.addEventListener("click", () => runAnalysis(false));
     els.rerun.addEventListener("click", () => runAnalysis(true));
+    els.save.addEventListener("click", () => saveCurrentAnalysis());
+    els.updateSave.addEventListener("click", () => saveCurrentAnalysis({ update: true }));
+    els.savedRefresh.addEventListener("click", () => loadSavedAnalyses({ force: true }));
   }
 
   async function init() {
@@ -923,10 +1366,15 @@
       initMapSelector();
       if (window.location.hash === "#analysis") {
         activateView("analysis-view");
+      } else if (window.location.hash === "#saved-indicator") {
+        activateView("saved-indicator-view");
+      } else if (window.location.hash === "#saved-analysis") {
+        activateView("saved-analysis-view");
       }
       els.optionsStatus.textContent = `${options.tables.length}개 테이블`;
       setAnalysisStatus("분석 조건을 선택하세요");
       setBadge("");
+      updateSaveButtons();
     } catch (error) {
       els.optionsStatus.textContent = "불러오기 실패";
       setAnalysisStatus(error.message, true);

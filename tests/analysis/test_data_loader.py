@@ -158,11 +158,32 @@ def test_load_analysis_panel_validates_metadata_and_builds_panel(tmp_path: Path)
 
     source_sql, source_params = connection.calls[-1]
     assert 'FROM "clean"."clean_population_sex"' in source_sql
-    assert '"population" AS raw_value' in source_sql
+    assert 'SUM("population") AS raw_value' in source_sql
     assert '"sex" = :filter_sex' in source_sql
+    assert "GROUP BY date, region_sido, region_sigungu" in source_sql
     assert source_params["filter_sex"] == "all"
     assert source_params["start_period"] == 202512
     assert source_params["normalization_base"] == 202512
+
+
+def test_load_analysis_panel_accepts_multiple_filter_values(tmp_path: Path) -> None:
+    connection = FakeConnection(make_rows())
+
+    load_analysis_panel(
+        connection,
+        AnalysisOutcome(
+            table="clean.clean_population_sex",
+            variable="population",
+            filters={"sex": ["male", "female"]},
+        ),
+        make_spec(),
+        region_merge_key_path=write_region_key(tmp_path / "region_merge_key.csv"),
+    )
+
+    source_sql, source_params = connection.calls[-1]
+    assert '"sex" IN (:filter_sex_0, :filter_sex_1)' in source_sql
+    assert source_params["filter_sex_0"] == "male"
+    assert source_params["filter_sex_1"] == "female"
 
 
 def test_load_analysis_panel_rejects_unknown_variable(tmp_path: Path) -> None:

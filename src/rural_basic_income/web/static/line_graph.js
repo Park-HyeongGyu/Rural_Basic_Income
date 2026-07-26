@@ -45,6 +45,10 @@
       renderEmptyState(element, emptyMessage);
       return;
     }
+    if (element.querySelector(".empty-state")) {
+      Plotly.purge(element);
+      element.replaceChildren();
+    }
 
     const traces = seriesGroups.map((group, index) => {
       const points = group.points.map((point) => ({
