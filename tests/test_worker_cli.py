@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 
-from rural_basic_income.worker import cli, clean_orchestrator, raw_orchestrator
+from rural_basic_income.worker import cli, clean_orchestrator
+from rural_basic_income.worker import export as csv_export
+from rural_basic_income.worker import raw_orchestrator
 
 
 class ScalarResult:
@@ -125,6 +127,94 @@ def test_run_update_runs_raw_then_clean_with_selected_options() -> None:
     assert "population: clean_population.sql statements=16" in output.getvalue()
 
 
+def test_run_update_exports_when_raw_was_written() -> None:
+    calls: list[tuple[str, Any]] = []
+    output = io.StringIO()
+    engine = object()
+
+    def raw_runner(*args, **kwargs):
+        calls.append(("raw", kwargs["engine"]))
+        return (
+            raw_orchestrator.RawRefreshResult(
+                source_name="population",
+                period="202601",
+                status="downloaded_written",
+                row_count=10,
+            ),
+        )
+
+    def clean_runner(*args, **kwargs):
+        calls.append(("clean", kwargs["engine"]))
+        return ()
+
+    def export_runner(**kwargs):
+        calls.append(("export", kwargs["engine"], kwargs["export_csv_dir"]))
+        return csv_export.ExportResult(
+            export_dir=Path("/tmp/rbi-export"),
+            tables=(
+                csv_export.ExportTableResult(
+                    schema_name="clean",
+                    table_name="clean_population",
+                    file_path=Path("/tmp/rbi-export/clean_population.csv"),
+                    row_count=1,
+                ),
+            ),
+        )
+
+    result = cli.run_update(
+        start_period="202601",
+        end_period="202601",
+        engine=engine,
+        raw_runner=raw_runner,
+        clean_runner=clean_runner,
+        export_requested=True,
+        export_csv_dir="/tmp/rbi-export",
+        export_runner=export_runner,
+        output=output,
+        lock_update=False,
+    )
+
+    assert calls == [
+        ("raw", engine),
+        ("clean", engine),
+        ("export", engine, "/tmp/rbi-export"),
+    ]
+    assert result.export_result is not None
+    assert "clean.clean_population: clean_population.csv rows=1" in output.getvalue()
+
+
+def test_run_update_skips_export_when_nothing_was_written() -> None:
+    output = io.StringIO()
+
+    def raw_runner(*args, **kwargs):
+        return (
+            raw_orchestrator.RawRefreshResult(
+                source_name="population",
+                period="202601",
+                status="skipped_existing",
+                row_count=10,
+            ),
+        )
+
+    def fail_export_runner(**kwargs):
+        raise AssertionError("export should not run without raw writes")
+
+    result = cli.run_update(
+        start_period="202601",
+        end_period="202601",
+        engine=object(),
+        raw_runner=raw_runner,
+        clean_runner=lambda *args, **kwargs: (),
+        export_requested=True,
+        export_runner=fail_export_runner,
+        output=output,
+        lock_update=False,
+    )
+
+    assert result.export_result is None
+    assert "skipped: no raw writes or clean rebuild" in output.getvalue()
+
+
 def test_run_update_uses_update_overlap_lock() -> None:
     calls: list[str] = []
     connection = LockingConnection(lock_result=True)
@@ -195,6 +285,9 @@ def test_update_command_parses_sources_and_datasets(
             "--datasets",
             "electricity,local_currency",
             "--force-raw",
+            "--export",
+            "--export-csv-dir",
+            "/tmp/rbi-export",
         )
     )
 
@@ -206,6 +299,8 @@ def test_update_command_parses_sources_and_datasets(
             "sources": ("population", "mover", "electricity"),
             "datasets": ("population", "electricity", "local_currency"),
             "force_raw": True,
+            "export_requested": True,
+            "export_csv_dir": "/tmp/rbi-export",
         }
     ]
 
@@ -238,6 +333,8 @@ def test_update_command_uses_default_sources_and_datasets(
             "sources": None,
             "datasets": None,
             "force_raw": False,
+            "export_requested": False,
+            "export_csv_dir": None,
         }
     ]
 
@@ -265,6 +362,7 @@ def test_update_command_accepts_legacy_force_as_raw_force(
 
     assert exit_code == 0
     assert calls[0]["force_raw"] is True
+    assert calls[0]["export_requested"] is False
 
 
 def test_update_latest_command_calls_latest_runner(
@@ -300,6 +398,8 @@ def test_update_latest_command_calls_latest_runner(
             "fallback_start_period": "202501",
             "end_period": "202606",
             "force_raw": False,
+            "export_requested": False,
+            "export_csv_dir": None,
         }
     ]
 
@@ -331,6 +431,9 @@ def test_clean_command_parses_rebuild_periods(
             "202601",
             "--end-period",
             "202602",
+            "--export",
+            "--export-csv-dir",
+            "/tmp/rbi-export",
         )
     )
 
@@ -341,8 +444,26 @@ def test_clean_command_parses_rebuild_periods(
             "rebuild": True,
             "start_period": "202601",
             "end_period": "202602",
+            "export_requested": True,
+            "export_csv_dir": "/tmp/rbi-export",
         }
     ]
+
+
+def test_export_command_runs_current_db_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fake_run_export(**kwargs):
+        calls.append(kwargs)
+        return csv_export.ExportResult(export_dir=Path("/tmp/rbi-export"), tables=())
+
+    monkeypatch.setattr(cli, "run_export", fake_run_export)
+    exit_code = cli.main(("export", "--export-csv-dir", "/tmp/rbi-export"))
+
+    assert exit_code == 0
+    assert calls == [{"export_csv_dir": "/tmp/rbi-export"}]
 
 
 def test_status_command_parses_sources(

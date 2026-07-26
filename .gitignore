@@ -32,6 +32,7 @@ migrations/
 
 # Project runtime outputs
 data/
+export/
 exports/
 logs/
 *.log

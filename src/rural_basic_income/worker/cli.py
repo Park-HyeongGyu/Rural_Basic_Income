@@ -11,11 +11,14 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from rural_basic_income.db.connection import get_engine
-from rural_basic_income.worker import clean_orchestrator, raw_orchestrator
+from rural_basic_income.worker import clean_orchestrator
+from rural_basic_income.worker import export as csv_export
+from rural_basic_income.worker import raw_orchestrator
 
 RawRangeRunner = Callable[..., tuple[raw_orchestrator.RawRefreshResult, ...]]
 RawLatestRunner = Callable[..., tuple[raw_orchestrator.RawRefreshResult, ...]]
 CleanRunner = Callable[..., tuple[clean_orchestrator.CleanDatasetResult, ...]]
+ExportRunner = Callable[..., csv_export.ExportResult]
 LOGGER = logging.getLogger(__name__)
 UPDATE_LOCK_KEY = "rural_basic_income.update"
 
@@ -28,6 +31,7 @@ class WorkerCliError(RuntimeError):
 class WorkerUpdateResult:
     raw_results: tuple[raw_orchestrator.RawRefreshResult, ...]
     clean_results: tuple[clean_orchestrator.CleanDatasetResult, ...]
+    export_result: csv_export.ExportResult | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,31 @@ def print_clean_results(
         )
 
 
+def print_export_results(
+    result: csv_export.ExportResult | None,
+    *,
+    output: TextIO,
+) -> None:
+    print("export:", file=output)
+    if result is None:
+        print("  skipped: no raw writes or clean rebuild", file=output)
+        return
+
+    print(f"  dir: {result.export_dir}", file=output)
+    for table in result.tables:
+        print(
+            f"  {table.schema_name}.{table.table_name}: "
+            f"{table.file_path.name} rows={table.row_count}",
+            file=output,
+        )
+
+
+def raw_results_have_writes(
+    results: Sequence[raw_orchestrator.RawRefreshResult],
+) -> bool:
+    return any(result.status == "downloaded_written" for result in results)
+
+
 def scalar_bool(result) -> bool:
     if hasattr(result, "scalar_one"):
         return bool(result.scalar_one())
@@ -138,6 +167,9 @@ def run_update(
     engine: Engine | None = None,
     raw_runner: RawRangeRunner = raw_orchestrator.refresh_raw_range,
     clean_runner: CleanRunner = clean_orchestrator.run_clean_datasets,
+    export_requested: bool = False,
+    export_csv_dir: str | None = None,
+    export_runner: ExportRunner = csv_export.export_csv,
     output: TextIO = sys.stdout,
     lock_update: bool = True,
 ) -> WorkerUpdateResult:
@@ -171,15 +203,26 @@ def run_update(
             engine=db_engine,
         )
         print_clean_results(clean_results, output=output)
+        export_result = None
+        if export_requested:
+            if raw_results_have_writes(raw_results):
+                export_result = export_runner(
+                    export_csv_dir=export_csv_dir,
+                    engine=db_engine,
+                )
+            print_export_results(export_result, output=output)
         LOGGER.info(
-            "worker update complete raw_results=%d clean_results=%d",
+            "worker update complete raw_results=%d clean_results=%d "
+            "exported=%s",
             len(raw_results),
             len(clean_results),
+            export_result is not None,
         )
 
         return WorkerUpdateResult(
             raw_results=tuple(raw_results),
             clean_results=tuple(clean_results),
+            export_result=export_result,
         )
 
     if not lock_update:
@@ -197,6 +240,9 @@ def run_update_latest(
     engine: Engine | None = None,
     raw_latest_runner: RawLatestRunner = raw_orchestrator.refresh_raw_latest,
     clean_runner: CleanRunner = clean_orchestrator.run_clean_datasets,
+    export_requested: bool = False,
+    export_csv_dir: str | None = None,
+    export_runner: ExportRunner = csv_export.export_csv,
     output: TextIO = sys.stdout,
     lock_update: bool = True,
 ) -> WorkerUpdateResult:
@@ -232,14 +278,25 @@ def run_update_latest(
             engine=db_engine,
         )
         print_clean_results(clean_results, output=output)
+        export_result = None
+        if export_requested:
+            if raw_results_have_writes(raw_results):
+                export_result = export_runner(
+                    export_csv_dir=export_csv_dir,
+                    engine=db_engine,
+                )
+            print_export_results(export_result, output=output)
         LOGGER.info(
-            "worker update latest complete raw_results=%d clean_results=%d",
+            "worker update latest complete raw_results=%d clean_results=%d "
+            "exported=%s",
             len(raw_results),
             len(clean_results),
+            export_result is not None,
         )
         return WorkerUpdateResult(
             raw_results=tuple(raw_results),
             clean_results=tuple(clean_results),
+            export_result=export_result,
         )
 
     if not lock_update:
@@ -255,6 +312,9 @@ def run_clean(
     end_period: str | None = None,
     engine: Engine | None = None,
     clean_runner: CleanRunner = clean_orchestrator.run_clean_datasets,
+    export_requested: bool = False,
+    export_csv_dir: str | None = None,
+    export_runner: ExportRunner = csv_export.export_csv,
     output: TextIO = sys.stdout,
 ) -> tuple[clean_orchestrator.CleanDatasetResult, ...]:
     db_engine = engine or get_engine()
@@ -266,7 +326,31 @@ def run_clean(
         end_period=end_period,
     )
     print_clean_results(clean_results, output=output)
+    if export_requested:
+        export_result = None
+        if rebuild:
+            export_result = export_runner(
+                export_csv_dir=export_csv_dir,
+                engine=db_engine,
+            )
+        print_export_results(export_result, output=output)
     return tuple(clean_results)
+
+
+def run_export(
+    *,
+    export_csv_dir: str | None = None,
+    engine: Engine | None = None,
+    export_runner: ExportRunner = csv_export.export_csv,
+    output: TextIO = sys.stdout,
+) -> csv_export.ExportResult:
+    db_engine = engine or get_engine()
+    export_result = export_runner(
+        export_csv_dir=export_csv_dir,
+        engine=db_engine,
+    )
+    print_export_results(export_result, output=output)
+    return export_result
 
 
 def run_status(
@@ -306,6 +390,8 @@ def run_update_command(args: argparse.Namespace) -> int:
             fallback_start_period=args.start_period,
             end_period=args.end_period,
             force_raw=args.force_raw,
+            export_requested=args.export,
+            export_csv_dir=args.export_csv_dir,
         )
     else:
         if not args.start_period or not args.end_period:
@@ -318,6 +404,8 @@ def run_update_command(args: argparse.Namespace) -> int:
             sources=sources,
             datasets=datasets,
             force_raw=args.force_raw,
+            export_requested=args.export,
+            export_csv_dir=args.export_csv_dir,
         )
     return 0
 
@@ -329,6 +417,8 @@ def run_clean_command(args: argparse.Namespace) -> int:
         rebuild=args.rebuild,
         start_period=args.start_period,
         end_period=args.end_period,
+        export_requested=args.export,
+        export_csv_dir=args.export_csv_dir,
     )
     return 0
 
@@ -336,6 +426,11 @@ def run_clean_command(args: argparse.Namespace) -> int:
 def run_status_command(args: argparse.Namespace) -> int:
     sources = split_option_values(args.sources)
     run_status(sources=sources)
+    return 0
+
+
+def run_export_command(args: argparse.Namespace) -> int:
+    run_export(export_csv_dir=args.export_csv_dir)
     return 0
 
 
@@ -410,6 +505,18 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
     update_parser.add_argument(
+        "--export",
+        action="store_true",
+        help=(
+            "export raw and clean CSV files after the update only when raw "
+            "data was written"
+        ),
+    )
+    update_parser.add_argument(
+        "--export-csv-dir",
+        help="directory for flat raw_*.csv and clean_*.csv files",
+    )
+    update_parser.add_argument(
         "--log-level",
         default="INFO",
         help="worker log level for stdout/stderr logs. Default: INFO",
@@ -450,6 +557,15 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
         default="INFO",
         help="worker log level for stdout/stderr logs. Default: INFO",
     )
+    clean_parser.add_argument(
+        "--export",
+        action="store_true",
+        help="export raw and clean CSV files after an explicit clean rebuild",
+    )
+    clean_parser.add_argument(
+        "--export-csv-dir",
+        help="directory for flat raw_*.csv and clean_*.csv files",
+    )
     clean_parser.set_defaults(func=run_clean_command)
 
     status_parser = subparsers.add_parser(
@@ -472,6 +588,21 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
     )
     status_parser.set_defaults(func=run_status_command)
 
+    export_parser = subparsers.add_parser(
+        "export",
+        help="export current raw and clean tables to flat CSV files",
+    )
+    export_parser.add_argument(
+        "--export-csv-dir",
+        help="directory for flat raw_*.csv and clean_*.csv files",
+    )
+    export_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="worker log level for stdout/stderr logs. Default: INFO",
+    )
+    export_parser.set_defaults(func=run_export_command)
+
     return parser
 
 
@@ -486,6 +617,7 @@ def main(argv: Sequence[str] | None = None, *, prog: str = "rbi") -> int:
         WorkerCliError,
         raw_orchestrator.RawOrchestratorError,
         clean_orchestrator.CleanOrchestratorError,
+        csv_export.ExportError,
     ) as exc:
         parser.exit(2, f"rbi: error: {exc}\n")
     return 0

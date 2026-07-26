@@ -151,6 +151,7 @@ Put API keys in the ignored local `.env` file:
 KOSIS_API_KEY=your-api-key
 KEPCO_API_KEY=your-api-key
 DATA_GO_KR_API_KEY=your-api-key
+EXPORT_CSV_DIR=/export/csv
 ```
 
 Download raw data for a period range and then run clean SQL:
@@ -165,6 +166,13 @@ Refresh from each source's last successful period through the current month:
 
 ```bash
 .venv/bin/rbi update --latest
+```
+
+Refresh only missing source-periods and export professor-facing CSV files only
+when raw data was actually written:
+
+```bash
+.venv/bin/rbi update --latest --export
 ```
 
 Limit the raw sources or clean datasets when needed:
@@ -199,6 +207,30 @@ Rebuild existing clean rows only through the explicit clean command:
   --end-period 202601 \
   --rebuild
 ```
+
+Add `--export` to an explicit clean rebuild when the rebuilt clean tables should
+replace the shared CSV files:
+
+```bash
+.venv/bin/rbi clean \
+  --datasets electricity \
+  --start-period 202601 \
+  --end-period 202601 \
+  --rebuild \
+  --export
+```
+
+Export the current `raw` and `clean` schemas without downloading or rebuilding
+data:
+
+```bash
+.venv/bin/rbi export
+```
+
+CSV export writes only the latest flat files to `EXPORT_CSV_DIR`, which defaults
+to `/export/csv` inside the container. It exports `raw.*` and `clean.*` only;
+`raw_json` and `metadata` are intentionally not exported. File names are flat,
+for example `raw_population.csv` and `clean_population.csv`.
 
 Inspect source download status:
 
@@ -263,6 +295,7 @@ The deployment assumes the PostgreSQL volume already exists on the server. Insta
 
 ```bash
 mkdir -p ~/.config/containers/systemd
+mkdir -p export/csv
 cp deploy/quadlet/rbi-pod.pod \
   deploy/quadlet/rbi-postgres.container \
   deploy/quadlet/rbi-web.container \
@@ -279,6 +312,10 @@ systemctl --user start rbi-analysis.service
 
 `rbi-pod.pod` publishes the web service on `127.0.0.1:8000` and PostgreSQL on `127.0.0.1:5432`. Redis is kept inside the shared pod network and is not published to the host by default. The web, database, Redis, and analysis containers share the pod network namespace, so the existing local `127.0.0.1` service settings work inside the deployment pod.
 
+`rbi-web.container` bind mounts the project-local `export/` directory to
+`/export` inside the container. CSV files for sharing are written flat under
+`export/csv/`.
+
 Check the running web service:
 
 ```bash
@@ -290,6 +327,12 @@ Run a manual update inside the running web container:
 
 ```bash
 podman exec rbi-web rbi update --latest
+```
+
+Run an update and refresh the shared CSV files only if new raw data was written:
+
+```bash
+podman exec rbi-web rbi update --latest --export
 ```
 
 Install a host user systemd timer template for scheduled updates:
