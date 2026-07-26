@@ -4,6 +4,7 @@
     treatments: [],
     controls: [],
     selectedFilters: new Map(),
+    mapSelector: null,
     pollTimer: null,
   };
 
@@ -88,6 +89,26 @@
 
   function regionId(region) {
     return `${region.region_sido}::${region.region_sigungu}`;
+  }
+
+  function findRegion(region) {
+    if (!state.options || !region) {
+      return null;
+    }
+    return state.options.regions.find(
+      (item) =>
+        item.region_sido === region.region_sido &&
+        item.region_sigungu === region.region_sigungu,
+    );
+  }
+
+  function removeRegionById(regions, id) {
+    const index = regions.findIndex((region) => regionId(region) === id);
+    if (index === -1) {
+      return false;
+    }
+    regions.splice(index, 1);
+    return true;
   }
 
   function setAnalysisStatus(message, isError = false) {
@@ -350,44 +371,97 @@
     }
   }
 
-  function addTreatmentRegion() {
-    const region = selectedPickerRegion(els.treatmentSido, els.treatmentSigungu);
+  function addTreatmentRegion(regionArg, options = {}) {
+    const selectedRegion =
+      regionArg && regionArg.region_sido
+        ? regionArg
+        : selectedPickerRegion(els.treatmentSido, els.treatmentSigungu);
+    const region = findRegion(selectedRegion);
+    if (!region) {
+      setAnalysisStatus("분석에 사용할 수 없는 지역입니다", true);
+      return false;
+    }
     const id = regionId(region);
     if (state.treatments.some((item) => regionId(item) === id)) {
       setAnalysisStatus("이미 추가된 처리지역입니다", true);
-      return;
+      return false;
     }
     if (state.controls.some((item) => regionId(item) === id)) {
-      setAnalysisStatus("비교지역에 들어간 지역은 처리지역으로 추가할 수 없습니다", true);
-      return;
+      if (!options.replaceOpposite) {
+        setAnalysisStatus("비교지역에 들어간 지역은 처리지역으로 추가할 수 없습니다", true);
+        return false;
+      }
+      removeRegionById(state.controls, id);
     }
     state.treatments.push({
       ...region,
-      treatment_period: els.treatmentPeriod.value,
+      treatment_period: options.treatmentPeriod || els.treatmentPeriod.value,
     });
     renderSelectedRegions();
     setAnalysisStatus("처리지역을 추가했습니다");
+    return true;
   }
 
-  function addControlRegion() {
-    const region = selectedPickerRegion(els.controlSido, els.controlSigungu);
+  function addControlRegion(regionArg, options = {}) {
+    const selectedRegion =
+      regionArg && regionArg.region_sido
+        ? regionArg
+        : selectedPickerRegion(els.controlSido, els.controlSigungu);
+    const region = findRegion(selectedRegion);
+    if (!region) {
+      setAnalysisStatus("분석에 사용할 수 없는 지역입니다", true);
+      return false;
+    }
     const id = regionId(region);
     if (state.controls.some((item) => regionId(item) === id)) {
       setAnalysisStatus("이미 추가된 비교지역입니다", true);
-      return;
+      return false;
     }
     if (state.treatments.some((item) => regionId(item) === id)) {
-      setAnalysisStatus("처리지역에 들어간 지역은 비교지역으로 추가할 수 없습니다", true);
-      return;
+      if (!options.replaceOpposite) {
+        setAnalysisStatus("처리지역에 들어간 지역은 비교지역으로 추가할 수 없습니다", true);
+        return false;
+      }
+      removeRegionById(state.treatments, id);
     }
     state.controls.push({ ...region });
     renderSelectedRegions();
     setAnalysisStatus("비교지역을 추가했습니다");
+    return true;
+  }
+
+  function clearRegionSelection(regionArg) {
+    const region = findRegion(regionArg);
+    if (!region) {
+      setAnalysisStatus("분석에 사용할 수 없는 지역입니다", true);
+      return false;
+    }
+    const id = regionId(region);
+    const removed =
+      removeRegionById(state.treatments, id) || removeRegionById(state.controls, id);
+    if (!removed) {
+      setAnalysisStatus("선택된 지역이 아닙니다", true);
+      return false;
+    }
+    renderSelectedRegions();
+    setAnalysisStatus("지역 선택을 해제했습니다");
+    return true;
   }
 
   function renderSelectedRegions() {
     renderTreatmentList();
     renderControlList();
+    syncMapSelection();
+  }
+
+  function syncMapSelection() {
+    if (!state.mapSelector) {
+      return;
+    }
+    state.mapSelector.updateSelections({
+      treatments: state.treatments,
+      controls: state.controls,
+    });
   }
 
   function renderTreatmentList() {
@@ -767,6 +841,36 @@
     }
   }
 
+  function initMapSelector() {
+    const panel = document.getElementById("analysis-map-panel");
+    if (!panel || !window.RBIRegionMap) {
+      return;
+    }
+    state.mapSelector = window.RBIRegionMap.create({
+      root: panel,
+      mapUrl: panel.dataset.mapSrc,
+      regions: state.options.regions,
+      labels: true,
+      selections: {
+        treatments: state.treatments,
+        controls: state.controls,
+      },
+      callbacks: {
+        select: (region, mode) => {
+          if (mode === "treatment") {
+            addTreatmentRegion(region, { replaceOpposite: true });
+            return;
+          }
+          if (mode === "control") {
+            addControlRegion(region, { replaceOpposite: true });
+          }
+        },
+        clearSelection: clearRegionSelection,
+        setStatus: setAnalysisStatus,
+      },
+    });
+  }
+
   function bindEvents() {
     document.querySelectorAll(".tab-button").forEach((button) => {
       button.addEventListener("click", () => {
@@ -796,8 +900,8 @@
     els.controlSido.addEventListener("change", () => {
       populateSigunguPicker(els.controlSido, els.controlSigungu);
     });
-    els.addTreatment.addEventListener("click", addTreatmentRegion);
-    els.addControl.addEventListener("click", addControlRegion);
+    els.addTreatment.addEventListener("click", () => addTreatmentRegion());
+    els.addControl.addEventListener("click", () => addControlRegion());
     els.run.addEventListener("click", () => runAnalysis(false));
     els.rerun.addEventListener("click", () => runAnalysis(true));
   }
@@ -816,6 +920,7 @@
       addDefaultRegions();
       syncTreatmentPeriodChoices();
       renderSelectedRegions();
+      initMapSelector();
       if (window.location.hash === "#analysis") {
         activateView("analysis-view");
       }

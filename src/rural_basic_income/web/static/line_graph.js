@@ -67,7 +67,7 @@
           color: colors[index % colors.length],
           size: 6,
         },
-        hovertemplate: "%{y:,.0f}<extra></extra>",
+        hovertemplate: group.hoverTemplate || options.hoverTemplate || "%{y:,.0f}<extra></extra>",
       };
     });
 
@@ -87,7 +87,7 @@
       yaxis: {
         gridcolor: "#e6ebf1",
         tickfont: { color: "#65717f" },
-        tickformat: ",",
+        tickformat: options.yTickFormat || ",",
         zeroline: false,
       },
       legend: {

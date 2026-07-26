@@ -41,6 +41,7 @@ logs/
 # Local reference archives
 docs/old_codes/
 docs/AI/
+docs/bnd_sigungu_00_2023_4Q/
 
 # PostgreSQL and container local state
 pgdata/

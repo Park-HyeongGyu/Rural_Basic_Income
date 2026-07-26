@@ -1,6 +1,8 @@
 const state = {
   regions: [],
   status: null,
+  dashboardMap: null,
+  selectedRegions: [],
   selectedVariables: new Set(),
   selectedFilters: new Map(),
 };
@@ -8,7 +10,11 @@ const state = {
 const els = {
   sido: document.getElementById("sido-select"),
   sigungu: document.getElementById("sigungu-select"),
+  addRegion: document.getElementById("dashboard-add-region"),
+  clearRegions: document.getElementById("dashboard-clear-regions"),
+  regionList: document.getElementById("dashboard-region-list"),
   table: document.getElementById("table-select"),
+  normalize: document.getElementById("normalize-select"),
   filters: document.getElementById("filter-grid"),
   variables: document.getElementById("variable-list"),
   selectAllVariables: document.getElementById("select-all-variables"),
@@ -79,6 +85,86 @@ function selectedRegion() {
   };
 }
 
+function regionId(region) {
+  return `${region.region_sido}::${region.region_sigungu}`;
+}
+
+function regionLabel(region) {
+  return `${region.region_sido} ${region.region_sigungu}`;
+}
+
+function findRegion(region) {
+  return state.regions.find(
+    (item) =>
+      item.region_sido === region.region_sido &&
+      item.region_sigungu === region.region_sigungu,
+  );
+}
+
+function setSelectedRegions(regions, options = {}) {
+  const unique = [];
+  const seen = new Set();
+  for (const region of regions) {
+    const matched = findRegion(region);
+    if (!matched) {
+      continue;
+    }
+    const id = regionId(matched);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    unique.push({ ...matched });
+  }
+  state.selectedRegions = unique;
+  renderSelectedDashboardRegions();
+  syncDashboardMapSelection();
+  if (options.load !== false) {
+    loadSeries();
+  }
+}
+
+function addDashboardRegion(regionArg, options = {}) {
+  const region = findRegion(regionArg || selectedRegion());
+  if (!region) {
+    setStatus("선택할 수 없는 지역입니다", true);
+    return false;
+  }
+  if (state.selectedRegions.some((item) => regionId(item) === regionId(region))) {
+    setStatus("이미 선택된 지역입니다", true);
+    return false;
+  }
+  state.selectedRegions.push({ ...region });
+  renderSelectedDashboardRegions();
+  syncDashboardMapSelection();
+  if (options.load !== false) {
+    loadSeries();
+  }
+  return true;
+}
+
+function removeDashboardRegion(regionArg, options = {}) {
+  const region = findRegion(regionArg);
+  if (!region) {
+    setStatus("선택할 수 없는 지역입니다", true);
+    return false;
+  }
+  const nextRegions = state.selectedRegions.filter(
+    (item) => regionId(item) !== regionId(region),
+  );
+  if (nextRegions.length === state.selectedRegions.length) {
+    setStatus("선택된 지역이 아닙니다", true);
+    return false;
+  }
+  state.selectedRegions = nextRegions;
+  renderSelectedDashboardRegions();
+  syncDashboardMapSelection();
+  if (options.load !== false) {
+    loadSeries();
+  }
+  return true;
+}
+
 function regionsBySido(sido) {
   return state.regions.filter((region) => region.region_sido === sido);
 }
@@ -111,6 +197,43 @@ function populateSigungu(preferredSigungu) {
     (region) => region.region_sigungu,
     preferredSigungu,
   );
+}
+
+function renderSelectedDashboardRegions() {
+  els.regionList.replaceChildren();
+  if (!state.selectedRegions.length) {
+    const empty = document.createElement("div");
+    empty.className = "selection-empty";
+    empty.textContent = "지역 없음";
+    els.regionList.append(empty);
+    return;
+  }
+
+  state.selectedRegions.forEach((region) => {
+    const item = document.createElement("div");
+    item.className = "selected-region-item dashboard-region-item";
+
+    const name = document.createElement("strong");
+    name.textContent = regionLabel(region);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "text-button danger-button";
+    remove.textContent = "삭제";
+    remove.addEventListener("click", () => removeDashboardRegion(region));
+
+    item.append(name, remove);
+    els.regionList.append(item);
+  });
+}
+
+function syncDashboardMapSelection() {
+  if (!state.dashboardMap) {
+    return;
+  }
+  state.dashboardMap.updateSelections({
+    series: state.selectedRegions,
+  });
 }
 
 function populateTables() {
@@ -227,9 +350,11 @@ function updateChartTitle() {
     state.selectedVariables.has(variable.name),
   );
   els.chartKicker.textContent = table.table;
-  els.chartTitle.textContent = selected.length
+  const title = selected.length
     ? selected.map((variable) => variableLabel(variable)).join(", ")
     : "변수";
+  els.chartTitle.textContent =
+    els.normalize.value === "first100" ? `${title} (첫 관측치=100)` : title;
 }
 
 function renderDataStatus() {
@@ -287,8 +412,7 @@ function selectedVariables() {
   );
 }
 
-function seriesUrl(variable) {
-  const region = selectedRegion();
+function seriesUrl(variable, region) {
   const params = new URLSearchParams({
     region_sido: region.region_sido,
     region_sigungu: region.region_sigungu,
@@ -306,6 +430,50 @@ function seriesUrl(variable) {
   return `/api/series?${params.toString()}`;
 }
 
+function seriesLabel(variable, region, regionCount, variableCount) {
+  const variableText = variableLabel(variable);
+  const regionText = regionLabel(region);
+  if (regionCount > 1 && variableCount > 1) {
+    return `${regionText} · ${variableText}`;
+  }
+  if (regionCount > 1) {
+    return regionText;
+  }
+  if (variableCount > 1) {
+    return variableText;
+  }
+  return `${regionText} · ${variableText}`;
+}
+
+function normalizeGroups(groups) {
+  if (els.normalize.value !== "first100") {
+    return groups;
+  }
+  return groups.map((group) => {
+    const basePoint = group.points.find((point) => {
+      const value = Number(point.value);
+      return Number.isFinite(value) && value !== 0;
+    });
+    if (!basePoint) {
+      return {
+        ...group,
+        points: group.points.map((point) => ({ ...point, value: null })),
+      };
+    }
+    const base = Number(basePoint.value);
+    return {
+      ...group,
+      points: group.points.map((point) => {
+        const value = Number(point.value);
+        return {
+          ...point,
+          value: Number.isFinite(value) ? (value / base) * 100 : null,
+        };
+      }),
+    };
+  });
+}
+
 async function loadSeries() {
   const variables = selectedVariables();
   if (!variables.length) {
@@ -313,20 +481,42 @@ async function loadSeries() {
     setStatus("변수 없음", true);
     return;
   }
+  if (!state.selectedRegions.length) {
+    window.RBICharts.renderLineChart(els.chart, [], { emptyMessage: "지역 없음" });
+    setStatus("지역 없음", true);
+    return;
+  }
 
   setLoading(true);
   try {
-    const responses = await Promise.all(
-      variables.map((variable) =>
-        fetchJson(seriesUrl(variable)).then((payload) => ({
-          label: variableLabel(variable),
+    const requests = [];
+    for (const region of state.selectedRegions) {
+      for (const variable of variables) {
+        requests.push(
+          fetchJson(seriesUrl(variable, region)).then((payload) => ({
+          label: seriesLabel(
+            variable,
+            region,
+            state.selectedRegions.length,
+            variables.length,
+          ),
           points: payload.series,
-        })),
-      ),
-    );
-    window.RBICharts.renderLineChart(els.chart, responses);
+          })),
+        );
+      }
+    }
+    const responses = normalizeGroups(await Promise.all(requests));
+    window.RBICharts.renderLineChart(els.chart, responses, {
+      hoverTemplate:
+        els.normalize.value === "first100"
+          ? "%{y:,.2f}<extra></extra>"
+          : "%{y:,.0f}<extra></extra>",
+      yTickFormat: els.normalize.value === "first100" ? ",.1f" : ",",
+    });
     const totalPoints = responses.reduce((sum, group) => sum + group.points.length, 0);
-    setStatus(`${formatNumber(totalPoints)}개 관측치`);
+    setStatus(
+      `${formatNumber(totalPoints)}개 관측치 · ${formatNumber(state.selectedRegions.length)}개 지역`,
+    );
   } catch (error) {
     window.RBICharts.renderLineChart(els.chart, [], { emptyMessage: "조회 실패" });
     setStatus(error.message, true);
@@ -338,11 +528,23 @@ async function loadSeries() {
 function bindEvents() {
   els.sido.addEventListener("change", () => {
     populateSigungu();
-    loadSeries();
+    setSelectedRegions([selectedRegion()]);
   });
-  els.sigungu.addEventListener("change", loadSeries);
+  els.sigungu.addEventListener("change", () => {
+    setSelectedRegions([selectedRegion()]);
+  });
+  els.addRegion.addEventListener("click", () => {
+    addDashboardRegion(selectedRegion());
+  });
+  els.clearRegions.addEventListener("click", () => {
+    setSelectedRegions([]);
+  });
   els.table.addEventListener("change", () => {
     populateVariableOptions();
+    loadSeries();
+  });
+  els.normalize.addEventListener("change", () => {
+    updateChartTitle();
     loadSeries();
   });
   els.refresh.addEventListener("click", loadSeries);
@@ -361,6 +563,31 @@ function bindEvents() {
   });
 }
 
+function initDashboardMap() {
+  const panel = document.getElementById("dashboard-map-panel");
+  if (!panel || !window.RBIRegionMap) {
+    return;
+  }
+  state.dashboardMap = window.RBIRegionMap.create({
+    root: panel,
+    mapUrl: panel.dataset.mapSrc,
+    regions: state.regions,
+    labels: true,
+    selections: {
+      series: state.selectedRegions,
+    },
+    callbacks: {
+      select: (region) => {
+        addDashboardRegion(region);
+      },
+      clearSelection: (region) => {
+        removeDashboardRegion(region);
+      },
+      setStatus,
+    },
+  });
+}
+
 async function init() {
   bindEvents();
   try {
@@ -371,8 +598,10 @@ async function init() {
     state.regions = regionsPayload.regions;
     state.status = statusPayload;
     populateRegions();
+    setSelectedRegions([selectedRegion()], { load: false });
     populateTables();
     renderDataStatus();
+    initDashboardMap();
     await loadSeries();
   } catch (error) {
     setStatus(error.message, true);
