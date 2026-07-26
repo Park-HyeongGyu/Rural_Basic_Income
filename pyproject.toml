@@ -23,7 +23,6 @@ dependencies = [
 
 [project.scripts]
 rbi = "rural_basic_income.cli:main"
-rbi-worker = "rural_basic_income.worker.cli:main"
 
 [project.optional-dependencies]
 dev = [

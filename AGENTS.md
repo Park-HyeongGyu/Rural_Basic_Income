@@ -1,82 +1,118 @@
 # Project Instructions
 
-If present locally, read `docs/AI/HANDOFF_v0.3.0.md` before implementing v0.3.0 features. Files under `docs/AI/` are ignored and are used only for AI-to-AI handoff notes.
+If present locally, read `docs/AI/HANDOFF_v0.3.0.md` and the latest
+`docs/AI/TO_GPT_*.md` before making release or follow-up changes. Files under
+`docs/AI/` are ignored and are used only for AI-to-AI handoff notes.
 
-## Current Target
+## Current Status
 
-Build v0.3.0 as the Scheduled Update & Interactive TWFE Analysis release.
+The project is at the end of the v0.3.0 Scheduled Update & Interactive TWFE
+Analysis work. v0.3.0 currently includes:
 
-Main goals:
+- canonical `rbi` CLI commands: `rbi update`, `rbi clean`, `rbi status`,
+  and `rbi export`
+- per-source `rbi update --latest`
+- source x period raw transactions
+- dataset SQL file clean transactions
+- explicit raw force refresh and clean rebuild semantics
+- update-level PostgreSQL advisory lock
+- host user systemd timer templates that call
+  `podman exec rbi-web rbi update --latest --export`
+- CSV and Stata DTA export for `raw.*` and `clean.*`
+- Redis/Celery async analysis jobs
+- `rbi-redis` and `rbi-analysis` Quadlet examples
+- traditional TWFE DiD and traditional TWFE Event Study via PyFixest
+- analysis API, polling frontend, and Plotly result views
+- map-based region selection for indicators and analysis
+- saved indicators and saved analyses stored in PostgreSQL under
+  `saved.saved_indicator` and `saved.saved_analysis`
 
-1. Keep the v0.2.0 web dashboard and data refresh flow working.
-2. Replace the public/operator-facing `rbi-worker` command path with canonical `rbi` CLI commands.
-3. Add `rbi update --latest` so each source discovers and refreshes its own latest available periods.
-4. Remove the scheduled updater container pattern; use a host user systemd timer that runs `podman exec rbi-web rbi update --latest`.
-5. Preserve source x period raw transactions and dataset SQL file clean transactions.
-6. Add Redis and Celery only for asynchronous web-requested analysis jobs.
-7. Add an `rbi-analysis` container that runs Celery workers from the same application image as `rbi-web`.
-8. Add an interactive web analysis section for traditional TWFE DiD and traditional TWFE Event Study.
-
-Do not add updater containers, data-update Celery tasks, container-internal cron/systemd timers, login/admin systems, maps, React/Vue/SPAs, arbitrary regression formula editors, new data sources, Alembic, DuckDB/SQLite/MariaDB, R/Stata analysis, matching, synthetic control, or other estimators in v0.3.0 unless the user explicitly asks.
+Remaining release-oriented work is mostly image/server smoke testing,
+timer/service smoke testing, final documentation review, and
+`docs/AI/TO_GPT_v0.3.0.md`.
 
 ## Data Rules
 
-- Do not commit secrets, `.env`, PostgreSQL data, raw data files, exports, logs, API keys, or image tar files.
-- Do not add a migration framework.
+- Do not commit secrets, `.env`, PostgreSQL data, raw data files, exports, logs,
+  API keys, or image tar files.
+- Do not add Alembic or a migration framework unless the user explicitly asks.
 - Keep repeatable data transformations in standalone `.sql` files.
 - Do not hide cleaning SQL inside Python strings.
-- FastAPI should read raw and clean research tables; worker/CLI code performs writes.
+- FastAPI should read raw and clean research tables; worker/CLI code performs
+  writes.
 - Network/API fetches should finish before opening DB write transactions.
 - Raw writes should be atomic at the source x period boundary.
 - Clean writes should be atomic at the dataset SQL file boundary.
-- PostgreSQL is the canonical research data store. Redis is only for Celery broker, result backend, and analysis cache.
-- A source-period marked successful must not be damaged by a failed or unavailable force refresh.
-- Raw force refresh and clean rebuild are different operations and must be exposed as different CLI semantics.
-- Existing clean rows should not be silently replaced except through an explicit clean rebuild operation.
-- Do not silently drop, aggregate, or rewrite ambiguous panel rows during analysis. Return structured errors or warnings.
+- PostgreSQL is the canonical research data store. Redis is only for Celery
+  broker, result backend, and analysis cache.
+- A source-period marked successful must not be damaged by a failed or
+  unavailable force refresh.
+- Raw force refresh and clean rebuild are different operations.
+- Existing clean rows should not be replaced except through explicit clean
+  rebuild.
 
-## Updater Rules
+## CLI And Update Rules
 
-- The canonical CLI command is `rbi`.
-- Minimum commands are `rbi update`, `rbi clean`, and `rbi status`.
-- `rbi update --latest` must operate per source, not with one global latest period.
+- The canonical public CLI command is `rbi`; do not reintroduce the
+  `rbi-worker` console script.
+- `rbi update --latest` operates per source, not with one global latest period.
 - A missing or unpublished month for one source must not block other sources.
-- Add an update-level overlap guard, while keeping lower-level raw and clean transaction boundaries.
-- Data updates are run by host user systemd through `podman exec rbi-web rbi update --latest`.
+- Data updates are run by host user systemd through `podman exec rbi-web ...`.
 - Do not use Celery for data updates.
-- Do not keep `rbi-worker.container` as a scheduled updater. Remove or disable that pattern when implementing v0.3.0 deployment.
+- Do not bring back a scheduled updater container.
+- `rbi export` writes latest flat CSV/DTA files for `raw.*` and `clean.*` only;
+  it intentionally excludes `raw_json` and `metadata`.
 
 ## Analysis Rules
 
-- Implement only traditional TWFE DiD and traditional TWFE Event Study.
+- Implement only traditional TWFE DiD and traditional TWFE Event Study unless
+  the user explicitly asks for another estimator.
 - Treatment regions and control regions are both multi-select.
 - Each treatment region has its own `treatment_period`.
 - Control regions are untreated for the full analysis period.
 - A region cannot be both treatment and control.
 - `normalization_base` and `treatment_period` are separate inputs.
-- Normalize each region by its own outcome value in the normalization base month, so the region's base value becomes 1.
-- If `normalization_base >= treatment_period` for a treatment region, return a warning and continue.
+- Normalize each region by its own outcome value in the normalization base
+  month, so the region's base value becomes 1.
+- If `normalization_base >= treatment_period` for a treatment region, return a
+  warning and continue.
 - Hard-error on missing, NULL, zero, or duplicate normalization baseline values.
 - Always include region fixed effects and calendar-month fixed effects.
-- Always use one-way clustered standard errors at the `region_sido x region_sigungu` level.
+- Always use one-way clustered standard errors at the
+  `region_sido x region_sigungu` level.
 - Event Study reference period is fixed at `event_time = -1`.
-- Do not expose user-selectable fixed effects, cluster levels, or Event Study reference period in v0.3.0.
-- Use a validated Python regression package for fixed effects and clustered covariance; do not hand-roll numerical linear algebra.
-- Keep analysis core testable without Celery. Celery tasks should orchestrate, not contain all modeling logic.
-- Celery task messages must contain small canonical JSON specs, not DataFrames or large row payloads.
-- Cache keys must include canonicalized request fields, analysis code/model version, and data revision.
-- Force rerun must not delete a previous successful cached result before the new run succeeds.
+- Do not expose user-selectable fixed effects, cluster levels, or Event Study
+  reference period in v0.3.0.
+- Use a validated Python regression package for fixed effects and clustered
+  covariance; do not hand-roll numerical linear algebra.
+- Keep analysis core testable without Celery. Celery tasks should orchestrate,
+  not contain all modeling logic.
+- Celery task messages must contain small canonical JSON specs, not DataFrames
+  or large row payloads.
+- Cache keys must include canonicalized request fields, analysis code/model
+  version, and data revision.
+- Force rerun must not delete a previous successful cached result before the new
+  run succeeds.
+- Multi-value `age`/`sex` filters are allowed. Indicator charts draw selected
+  filter values as separate series; analysis panels aggregate selected filter
+  values to preserve one row per region-period.
 
-## Web and API Rules
+## Web And API Rules
 
-- Keep Jinja2, Vanilla JavaScript, Plotly.js, and the existing template/static structure.
-- Keep the current v0.2.0 dashboard working.
-- Add analysis UI as a section or tab on the existing page; do not redesign the whole frontend unless asked.
+- Keep Jinja2, Vanilla JavaScript, Plotly.js, and the existing template/static
+  structure.
+- Keep the dashboard, analysis, saved indicator, and saved analysis tabs working.
 - Long regression analysis must not run inside the Uvicorn request process.
-- FastAPI analysis endpoints enqueue Celery jobs, expose polling/status, and return structured errors without secrets or internal paths.
-- Validate table and variable names through allowlists derived from clean metadata. Do not trust arbitrary SQL identifiers from the client.
-- Dimension filters must leave a unique `region x period` panel. If not, return an error and let the user choose filters.
-- Public analysis POST endpoints should have at least one operational protection, chosen with the user, such as rate limits, basic auth, task limits, or request size limits.
+- FastAPI analysis endpoints enqueue Celery jobs, expose polling/status, and
+  return structured errors without secrets or internal paths.
+- Validate table and variable names through allowlists derived from clean
+  metadata. Do not trust arbitrary SQL identifiers from the client.
+- Saved indicator endpoints live under `/api/indicators/saved`.
+- Saved analysis endpoints live under `/api/analysis/saved`.
+- Saved view state belongs in the shared `saved` schema, not in separate
+  `analysis_saved` or `indicator_saved` schemas.
+- Map assets are generated static web assets. Do not rely on ignored shapefiles
+  at runtime.
 
 ## Deployment Rules
 
@@ -84,17 +120,20 @@ Do not add updater containers, data-update Celery tasks, container-internal cron
 - `rbi-web` runs Uvicorn/FastAPI.
 - `rbi-analysis` runs Celery and exposes no HTTP port.
 - `rbi-redis` stays inside the pod and should not be published externally.
-- Initial Celery policy: concurrency 1, prefetch multiplier 1, explicit time limits, JSON serialization, stdout logging.
+- Initial Celery policy: concurrency 1, prefetch multiplier 1, explicit time
+  limits, JSON serialization, stdout logging.
 - Host systemd timer templates belong under `deploy/systemd/`.
-- Do not hard-code the user's private absolute project path into reusable systemd templates.
+- Avoid adding new private absolute paths to reusable deployment templates.
 
 ## Implementation Style
 
-- Use Python, FastAPI, Jinja2, Vanilla JavaScript, Plotly.js, SQLAlchemy Core, psycopg, Redis, Celery, and a validated Python regression library.
-- Prefer small feature branches from `v0.3.0`.
-- Reuse existing KOSIS retry, timeout, chunking, raw conversion, and clean SQL code where possible.
-- Inspect actual official API responses or user-provided files before deciding raw columns, clean variables, units, or region mapping.
-- Keep web changes minimal unless the user explicitly starts a frontend redesign task.
-- Before implementing, perform the v0.3.0 M0 inspection: branch/HEAD/worktree, baseline tests, current Quadlet structure, force-refresh code path, metadata/clean schema, frontend metadata API, regression package choice, Redis/Celery deployment plan, and the first milestone file list.
-- Report the M0 findings and wait for user approval before changing feature code.
+- Use Python, FastAPI, Jinja2, Vanilla JavaScript, Plotly.js, SQLAlchemy Core,
+  psycopg, Redis, Celery, and PyFixest.
+- Prefer small feature branches from `v0.3.0` until this release is complete.
+- Reuse existing KOSIS retry, timeout, chunking, raw conversion, and clean SQL
+  code where possible.
+- Inspect actual official API responses or user-provided files before deciding
+  raw columns, clean variables, units, or region mapping.
 - Do not push, merge, tag, or release unless the user explicitly asks.
+- The user manages commits. `git add` is allowed, but always report immediately
+  after staging files.

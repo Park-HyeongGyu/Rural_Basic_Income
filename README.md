@@ -2,7 +2,7 @@
 
 농어촌기본소득 연구용 자체 호스팅 웹 프로젝트입니다.
 
-현재 `v0.3.0` 개발 브랜치는 `v0.2.0`에서 완성한 수동 데이터 갱신 흐름을 `rbi` CLI와 host systemd timer 구조로 정리하고, PyFixest 기반 TWFE 분석 foundation을 추가하고 있습니다.
+현재 `v0.3.0` 브랜치는 데이터 갱신을 canonical `rbi` CLI와 host systemd timer 구조로 정리하고, Redis/Celery 기반 비동기 TWFE 분석, 지도 기반 지역 선택, 저장된 지표/분석, CSV/DTA export를 제공하는 버전입니다.
 
 ## Branch Workflow
 
@@ -27,34 +27,40 @@
 v0.2.0에서 구현한 방향:
 
 - worker 중심 구조 정리
-- `rbi-worker update` console command 추가
+- 수동 데이터 갱신 command path 추가
 - source x period 단위 raw transaction
 - dataset SQL file 단위 clean transaction 유지
 - KOSIS 인구, 이동, 세대 source 분리
 - 전력사용량, 지역화폐 결제정보 source 추가
 - 전력사용량, 지역화폐 결제정보 clean SQL 추가
 - 신규 clean table을 기존 웹에서 조회
+- CSV/DTA export 기반 마련
 
-v0.3.0에서 구현 중인 방향:
+v0.3.0에서 구현한 방향:
 
 - canonical `rbi` CLI
 - `rbi update --latest`
 - `rbi clean --rebuild`
 - `rbi status`
+- `rbi export`
 - source별 latest period 탐색
 - update-level advisory lock
 - host user systemd timer가 `podman exec rbi-web rbi update --latest` 실행
 - scheduled updater container 제거
 - PyFixest 기반 traditional TWFE DiD 및 event-study core
 - clean table에서 선택 region, period, filter만 읽는 analysis data loader
-- Redis/Celery 기반 analysis task queue scaffold
+- Redis/Celery 기반 비동기 analysis task queue
+- analysis API와 polling frontend
+- 지도 기반 treatment/control 및 지표 지역 선택
+- 지표와 분석의 저장, 불러오기, 업데이트, 삭제
+- `age`, `sex` checkbox 다중 선택
+- professor-facing CSV/DTA export
 
 v0.3.0에서 현재 제외하는 기능:
 
 - updater container
 - data update Celery task
 - container 내부 cron/systemd timer
-- 지도 UI
 - 로그인 및 관리자 페이지
 - React 또는 Vue 기반 SPA
 - 별도 migration framework
@@ -82,6 +88,8 @@ v0.3.0에서 현재 제외하는 기능:
 
 `docs/AI/`는 ignored 경로이며 ChatGPT Work와 Codex 사이의 handoff 문서에만 사용합니다.
 `src/rural_basic_income/worker/`가 데이터 다운로드, raw 적재, clean SQL 실행을 담당합니다.
+`src/rural_basic_income/analysis/`는 분석 specification, panel loader, regression core, Celery task, cache를 담당합니다.
+`src/rural_basic_income/indicators/`는 저장된 지표 같은 지표 관련 server-side 기능을 담당합니다.
 
 ## Local Development
 
@@ -266,9 +274,32 @@ POST /api/analysis/jobs
 GET  /api/analysis/jobs/{task_id}
 GET  /api/analysis/results/{cache_key}
 GET  /api/analysis/options
+GET  /api/analysis/saved
+POST /api/analysis/saved
+GET  /api/analysis/saved/{saved_id}
+PATCH /api/analysis/saved/{saved_id}
+DELETE /api/analysis/saved/{saved_id}
 ```
 
 `POST /api/analysis/jobs` checks the Redis result cache before enqueueing Celery work. If the same canonical request is already running, the API returns the existing `task_id` instead of creating a duplicate job. A loose Redis rate limit is applied only to job creation requests; the default is 300 requests per 60 seconds per client address.
+
+## Web Interface
+
+The single Jinja2 page keeps the existing indicator dashboard and adds tabs for analysis, saved indicators, and saved analyses.
+
+- The indicator dashboard can select multiple regions from dropdowns or the map and draw them on one Plotly line chart.
+- Tables with `age` or `sex` dimensions expose those filters as checkboxes. In the dashboard, each selected filter value or combination becomes a separate line.
+- The analysis tab supports multiple treatment regions, multiple control regions, treatment-specific start months, a separate normalization base month, TWFE results, and Event Study results.
+- Saved indicators and saved analyses can be created, loaded, updated, and deleted from the web UI.
+
+Saved view state is stored in PostgreSQL:
+
+```text
+saved.saved_indicator
+saved.saved_analysis
+```
+
+`request_payload` stores the selected table, variables, regions, filters, and periods. `result_payload` stores the result snapshot that was shown when the item was saved.
 
 ## Container Image
 
