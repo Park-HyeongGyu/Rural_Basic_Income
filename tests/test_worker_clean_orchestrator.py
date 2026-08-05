@@ -177,6 +177,27 @@ def test_clean_dataset_specs_rejects_unknown_dataset() -> None:
         clean_orchestrator.clean_dataset_specs(("not_a_dataset",))
 
 
+def test_clean_dataset_registry_includes_od_and_keeps_manual_out_of_default() -> None:
+    dataset_names = {
+        spec.dataset_name
+        for spec in clean_orchestrator.clean_dataset_specs(
+            ("migration_od", "living_population")
+        )
+    }
+
+    assert dataset_names == {"migration_od", "living_population"}
+    assert "migration_od" in clean_orchestrator.DEFAULT_CLEAN_DATASETS
+    assert "living_population" not in clean_orchestrator.DEFAULT_CLEAN_DATASETS
+
+
+def test_driver_sql_statement_escapes_percent_for_psycopg_raw_execution() -> None:
+    statement = "SELECT * FROM raw.migration_od WHERE name LIKE '%시 %구'"
+
+    assert clean_orchestrator.driver_sql_statement(statement) == (
+        "SELECT * FROM raw.migration_od WHERE name LIKE '%%시 %%구'"
+    )
+
+
 def test_run_clean_datasets_bumps_revision_when_clean_rows_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

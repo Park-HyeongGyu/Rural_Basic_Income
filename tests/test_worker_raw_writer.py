@@ -228,6 +228,14 @@ def test_period_delete_predicate_supports_current_sources() -> None:
         '"crtr_ym" = :period',
         {"period": "202604"},
     )
+    assert raw_writer.period_delete_predicate(("statsYm",), "202604") == (
+        '"statsYm" = :period',
+        {"period": "202604"},
+    )
+    assert raw_writer.period_delete_predicate(("period",), "202604") == (
+        '"period" = :period',
+        {"period": "202604"},
+    )
     assert raw_writer.period_delete_predicate(("year", "month"), "202604") == (
         '"year" = :year AND "month" = :month',
         {"year": "2026", "month": "04"},

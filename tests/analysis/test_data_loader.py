@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from rural_basic_income.analysis.data_loader import load_analysis_panel
+from rural_basic_income.analysis import data_loader
 from rural_basic_income.analysis.exceptions import AnalysisSpecError
 from rural_basic_income.analysis.schemas import (
     AnalysisOutcome,
@@ -164,6 +165,27 @@ def test_load_analysis_panel_validates_metadata_and_builds_panel(tmp_path: Path)
     assert source_params["filter_sex"] == "all"
     assert source_params["start_period"] == 202512
     assert source_params["normalization_base"] == 202512
+
+
+class TableDiscoveryConnection:
+    def execute(self, statement, parameters=None):
+        sql = str(statement)
+        if "information_schema.tables" in sql:
+            return ScalarResult(
+                (
+                    "clean_inflow",
+                    "clean_population",
+                    "clean_living_population",
+                )
+            )
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+
+def test_fetch_clean_table_names_hides_od_tables_from_analysis() -> None:
+    assert data_loader.fetch_clean_table_names(TableDiscoveryConnection()) == (
+        "clean_population",
+        "clean_living_population",
+    )
 
 
 def test_load_analysis_panel_accepts_multiple_filter_values(tmp_path: Path) -> None:

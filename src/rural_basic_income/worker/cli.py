@@ -15,11 +15,13 @@ from rural_basic_income.db.connection import dispose_engine, get_engine
 from rural_basic_income.worker import clean_orchestrator
 from rural_basic_income.worker import export as csv_export
 from rural_basic_income.worker import raw_orchestrator
+from rural_basic_income.worker.importers import living_population
 
 RawRangeRunner = Callable[..., tuple[raw_orchestrator.RawRefreshResult, ...]]
 RawLatestRunner = Callable[..., tuple[raw_orchestrator.RawRefreshResult, ...]]
 CleanRunner = Callable[..., tuple[clean_orchestrator.CleanDatasetResult, ...]]
 ExportRunner = Callable[..., csv_export.ExportRunResult]
+LivingPopulationImporter = Callable[..., living_population.LivingPopulationImportResult]
 LOGGER = logging.getLogger(__name__)
 UPDATE_LOCK_KEY = "rural_basic_income.update"
 
@@ -38,6 +40,13 @@ class WorkerUpdateResult:
 @dataclass(frozen=True)
 class WorkerStatusResult:
     source_statuses: tuple[tuple[str, str | None], ...]
+    living_population_status: living_population.LivingPopulationImportStatus
+
+
+@dataclass(frozen=True)
+class WorkerImportResult:
+    import_result: living_population.LivingPopulationImportResult
+    export_result: csv_export.ExportRunResult | None = None
 
 
 def split_option_values(values: Sequence[str] | None) -> tuple[str, ...] | None:
@@ -124,6 +133,42 @@ def print_export_results(
                 f"{table.file_path.name} rows={table.row_count}",
                 file=output,
             )
+
+
+def print_living_population_import_result(
+    result: living_population.LivingPopulationImportResult,
+    *,
+    output: TextIO,
+) -> None:
+    print("import:", file=output)
+    print(
+        f"  {result.source_name}: {result.raw_status} "
+        f"periods={result.periods[0]}-{result.periods[-1]} "
+        f"raw_rows={result.raw_row_count} sha256={result.sha256[:12]}",
+        file=output,
+    )
+    if result.clean_results:
+        print_clean_results(result.clean_results, output=output)
+
+
+def print_living_population_status(
+    status: living_population.LivingPopulationImportStatus,
+    *,
+    output: TextIO,
+) -> None:
+    print("manual_imports:", file=output)
+    if not status.exists:
+        print("  living_population: last_import=none", file=output)
+        return
+    print(
+        "  living_population: "
+        f"status={status.status} "
+        f"periods={status.min_period}-{status.max_period} "
+        f"period_count={status.period_count} "
+        f"raw_rows={status.raw_row_count} "
+        f"file={status.original_filename}",
+        file=output,
+    )
 
 
 def raw_results_have_writes(
@@ -429,6 +474,66 @@ def run_export(
     return export_result
 
 
+def run_import_living_population(
+    *,
+    file_path: str,
+    force_raw: bool = False,
+    engine: Engine | None = None,
+    importer: LivingPopulationImporter = living_population.import_living_population_file,
+    export_requested: bool = False,
+    export_csv_dir: str | None = None,
+    export_dta_dir: str | None = None,
+    export_runner: ExportRunner = csv_export.export_all,
+    output: TextIO = sys.stdout,
+    lock_update: bool = True,
+) -> WorkerImportResult:
+    db_engine = engine or get_engine()
+
+    def locked_import() -> WorkerImportResult:
+        LOGGER.info(
+            "worker import living_population start file=%s force_raw=%s",
+            file_path,
+            force_raw,
+        )
+        import_result = importer(
+            file_path,
+            engine=db_engine,
+            force_raw=force_raw,
+        )
+        print_living_population_import_result(import_result, output=output)
+
+        export_result = None
+        if export_requested:
+            if (
+                import_result.raw_changed
+                or import_result.clean_changed
+                or export_outputs_missing(
+                    export_csv_dir=export_csv_dir,
+                    export_dta_dir=export_dta_dir,
+                )
+            ):
+                export_result = export_runner(
+                    export_csv_dir=export_csv_dir,
+                    export_dta_dir=export_dta_dir,
+                    engine=db_engine,
+                )
+            print_export_results(export_result, output=output)
+
+        LOGGER.info(
+            "worker import living_population complete raw_status=%s exported=%s",
+            import_result.raw_status,
+            export_result is not None,
+        )
+        return WorkerImportResult(
+            import_result=import_result,
+            export_result=export_result,
+        )
+
+    if not lock_update:
+        return locked_import()
+    return run_with_update_lock(db_engine, locked_import)
+
+
 def run_status(
     *,
     sources: Sequence[str] | None = None,
@@ -437,23 +542,29 @@ def run_status(
 ) -> WorkerStatusResult:
     db_engine = engine or get_engine()
     resolved_sources = tuple(sources or raw_orchestrator.DEFAULT_RAW_SOURCES)
-    statuses = tuple(
-        (
-            source_name,
-            raw_orchestrator.source_last_success_period(
+    with db_engine.connect() as connection:
+        statuses = tuple(
+            (
                 source_name,
-                engine=db_engine,
-            ),
+                raw_orchestrator.source_last_success_period(
+                    source_name,
+                    engine=db_engine,
+                ),
+            )
+            for source_name in resolved_sources
         )
-        for source_name in resolved_sources
-    )
+        living_status = living_population.fetch_latest_import_status(connection)
     print("status:", file=output)
     for source_name, last_success in statuses:
         print(
             f"  {source_name}: last_success={last_success or 'none'}",
             file=output,
         )
-    return WorkerStatusResult(source_statuses=statuses)
+    print_living_population_status(living_status, output=output)
+    return WorkerStatusResult(
+        source_statuses=statuses,
+        living_population_status=living_status,
+    )
 
 
 def run_update_command(args: argparse.Namespace) -> int:
@@ -514,6 +625,19 @@ def run_export_command(args: argparse.Namespace) -> int:
         export_dta_dir=args.export_dta_dir,
     )
     return 0
+
+
+def run_import_command(args: argparse.Namespace) -> int:
+    if args.import_type == "living-population":
+        run_import_living_population(
+            file_path=args.file,
+            force_raw=args.force_raw,
+            export_requested=args.export,
+            export_csv_dir=args.export_csv_dir,
+            export_dta_dir=args.export_dta_dir,
+        )
+        return 0
+    raise WorkerCliError(f"unknown import type: {args.import_type}")
 
 
 def add_common_source_dataset_options(update_parser: argparse.ArgumentParser) -> None:
@@ -699,12 +823,58 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
     )
     export_parser.set_defaults(func=run_export_command)
 
+    import_parser = subparsers.add_parser(
+        "import",
+        help="import manually downloaded source files",
+    )
+    import_subparsers = import_parser.add_subparsers(
+        dest="import_type",
+        required=True,
+    )
+    living_parser = import_subparsers.add_parser(
+        "living-population",
+        help="import a manually downloaded living population CSV",
+    )
+    living_parser.add_argument(
+        "--file",
+        required=True,
+        help="path to the living population CSV inside the container",
+    )
+    living_parser.add_argument(
+        "--force-raw",
+        action="store_true",
+        dest="force_raw",
+        help="replace raw rows even if the same file hash was already imported",
+    )
+    living_parser.add_argument(
+        "--export",
+        action="store_true",
+        help="export raw and clean CSV and DTA files after import",
+    )
+    living_parser.add_argument(
+        "--export-csv-dir",
+        help="directory for flat raw_*.csv and clean_*.csv files",
+    )
+    living_parser.add_argument(
+        "--export-dta-dir",
+        help="directory for flat raw_*.dta and clean_*.dta files",
+    )
+    living_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="worker log level for stdout/stderr logs. Default: INFO",
+    )
+    living_parser.set_defaults(func=run_import_command)
+
     return parser
 
 
 def main(argv: Sequence[str] | None = None, *, prog: str = "rbi") -> int:
+    parsed_argv = tuple(sys.argv[1:] if argv is None else argv)
+    original_argv0 = sys.argv[0]
+    sys.argv[0] = prog
     parser = build_parser(prog=prog)
-    args = parser.parse_args(argv)
+    args = parser.parse_args(parsed_argv)
     try:
         configure_logging(args.log_level)
         return args.func(args)
@@ -714,10 +884,12 @@ def main(argv: Sequence[str] | None = None, *, prog: str = "rbi") -> int:
         raw_orchestrator.RawOrchestratorError,
         clean_orchestrator.CleanOrchestratorError,
         csv_export.ExportError,
+        living_population.LivingPopulationImportError,
     ) as exc:
         parser.exit(2, f"rbi: error: {exc}\n")
     finally:
         dispose_engine()
+        sys.argv[0] = original_argv0
     return 0
 
 

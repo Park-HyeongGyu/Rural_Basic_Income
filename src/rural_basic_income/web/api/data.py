@@ -31,10 +31,21 @@ REGION_MERGE_KEY_PATH = (
 )
 BASE_SERIES_COLUMNS = ("date", "region_sido", "region_sigungu")
 FILTER_COLUMNS = ("sex", "age", "contract_type")
+OD_CLEAN_TABLES = {
+    "clean_inflow",
+    "clean_inflow_sex",
+    "clean_inflow_age",
+    "clean_inflow_sex_age",
+    "clean_outflow",
+    "clean_outflow_sex",
+    "clean_outflow_age",
+    "clean_outflow_sex_age",
+}
 NON_VARIABLE_COLUMNS = {
     "date",
     "region_sido",
     "region_sigungu",
+    "region_type",
     "sex",
     "age",
     "contract_type",
@@ -66,6 +77,14 @@ VARIABLE_LABELS = {
     "bill": "전기요금",
     "unit_cost": "평균단가",
     "contract_power": "계약전력",
+    "living_population": "생활인구",
+    "registered_population": "주민등록인구",
+    "stay_population": "체류인구",
+    "foreign_population": "외국인",
+    "living_population_suppressed": "생활인구 비공개",
+    "registered_population_suppressed": "주민등록인구 비공개",
+    "stay_population_suppressed": "체류인구 비공개",
+    "foreign_population_suppressed": "외국인 비공개",
 }
 FILTER_LABELS = {
     "sex": "성별",
@@ -123,7 +142,9 @@ def normalize_table_name(table: str) -> str:
 
 
 def fetch_clean_table_names(connection: Connection) -> list[str]:
-    return list(
+    return [
+        table_name
+        for table_name in (
         connection.execute(
             text(
                 """
@@ -136,7 +157,9 @@ def fetch_clean_table_names(connection: Connection) -> list[str]:
             ),
             {"schema": CLEAN_SCHEMA},
         ).scalars()
-    )
+        )
+        if table_name not in OD_CLEAN_TABLES
+    ]
 
 
 def fetch_table_columns(connection: Connection, table_name: str) -> list[dict[str, str]]:

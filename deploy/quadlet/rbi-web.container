@@ -7,7 +7,7 @@ After=rbi-postgres.service
 
 [Container]
 ContainerName=rbi-web
-Image=localhost/rural-basic-income:0.3.0
+Image=localhost/rural-basic-income:0.3.1
 # Port publishing lives in rbi-pod.pod because pod members share one network namespace.
 Pod=rbi-pod.pod
 EnvironmentFile=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/.env
@@ -17,6 +17,8 @@ Environment=EXPORT_DTA_DIR=/export/dta
 Environment=RBI_LATEST_START_PERIOD=202501
 Volume=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/export/csv:/export/csv:Z
 Volume=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/export/dta:/export/dta:Z
+# Optional manual imports. Override this host path for production as needed.
+Volume=/srv/rbi/imports:/imports:ro
 Exec=uvicorn rural_basic_income.web.main:app --host 0.0.0.0 --port 8000
 HealthCmd=python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=5).read()"
 HealthInterval=30s
@@ -26,6 +28,3 @@ HealthRetries=5
 [Service]
 Restart=always
 TimeoutStartSec=60
-
-[Install]
-WantedBy=default.target

@@ -2,15 +2,15 @@
 
 농어촌기본소득 연구용 자체 호스팅 웹 프로젝트입니다.
 
-현재 `v0.3.0` 브랜치는 데이터 갱신을 canonical `rbi` CLI와 host systemd timer 구조로 정리하고, Redis/Celery 기반 비동기 TWFE 분석, 지도 기반 지역 선택, 저장된 지표/분석, CSV/DTA export를 제공하는 버전입니다.
+현재 `v0.3.1` 브랜치는 v0.3.0의 scheduled update, export, 비동기 TWFE 분석, 지도 기반 선택 UI 위에 신규 데이터 파이프라인을 추가하는 버전입니다. 추가 대상은 행정안전부 지역별 인구이동 OD API와 사용자가 직접 내려받는 생활인구 CSV입니다.
 
 ## Branch Workflow
 
 - `main`: 안정 릴리즈 기준점
-- `v0.3.0`: v0.3.0 기능 통합 브랜치
-- `feat/v0.3.0-*`: `v0.3.0`에서 분기하는 개별 기능 브랜치
+- `v0.3.1`: v0.3.1 기능 통합 브랜치
+- `feat/v0.3.1-*`: `v0.3.1`에서 분기하는 개별 기능 브랜치
 
-기능 구현은 `v0.3.0`에서 기능 브랜치를 만들고, 검증 후 다시 `v0.3.0`으로 머지합니다.
+기능 구현은 `v0.3.1`에서 기능 브랜치를 만들고, 검증 후 다시 `v0.3.1`으로 머지합니다.
 
 ## Scope
 
@@ -56,7 +56,24 @@ v0.3.0에서 구현한 방향:
 - `age`, `sex` checkbox 다중 선택
 - professor-facing CSV/DTA export
 
-v0.3.0에서 현재 제외하는 기능:
+v0.3.1에서 구현한 방향:
+
+- 행정안전부 `지역별 인구이동 현황` source adapter
+- `migration_od` 기본 raw/update source
+- month x destination sido x origin sido x page 단위 API 요청
+- `raw.migration_od`와 `raw_json.payloads` 원본 보존
+- `clean_inflow*`, `clean_outflow*` 8개 OD clean table
+- origin/destination 양쪽 region mapping
+- 같은 canonical 시군구 내부 이동 clean 제외
+- 생활인구 CSV 수동 import command
+- file SHA-256 기반 living population 중복 import 방지
+- `raw.living_population` long raw table
+- `clean_living_population`, `clean_living_population_age`
+- 생활인구 `*` suppression을 NULL + boolean flag로 보존
+- 신규 raw/clean table export 포함
+- OD table의 기존 dashboard/analysis accidental exposure 방지
+
+v0.3.1에서 현재 제외하는 기능:
 
 - updater container
 - data update Celery task
@@ -64,7 +81,10 @@ v0.3.0에서 현재 제외하는 기능:
 - 로그인 및 관리자 페이지
 - React 또는 Vue 기반 SPA
 - 별도 migration framework
-- 새로운 외부 데이터 source
+- OD 전용 frontend
+- OD flow map
+- 생활인구 전용 dashboard redesign
+- OD table을 TWFE/Event Study outcome option에 추가
 
 ## Repository Layout
 
@@ -261,6 +281,90 @@ Inspect source download status:
 
 The worker writes raw payload chunks to `raw_json.payloads`, raw rows to `raw.*`, source-period metadata to `metadata.download_status`, and clean tables to `clean.*`. In `metadata.download_status`, `status = 1` means the source-period was written successfully and `status = 2` means the source returned no usable data or a non-standard response and will be retried on a later run.
 
+### Migration OD
+
+`migration_od`는 행정안전부 `지역별 인구이동 현황` API source입니다.
+
+```text
+O = origin      = mvt  = 전출지 = 출발지
+D = destination = mvin = 전입지 = 도착지
+```
+
+한 달은 17개 도착 시도 x 17개 출발 시도, 총 289개 scope를 모두 시도한 뒤에만 성공 source-period로 기록합니다. 일부 scope의 `NODATA`는 0건으로 허용하지만, 전체 scope가 `NODATA`이면 아직 공개되지 않은 월로 보고 다음 실행에서 재시도합니다.
+
+`migration_od`는 기본 `rbi update --latest` source/dataset에 포함됩니다.
+기존에 성공한 source-period는 `metadata.download_status.status = 1`을 기준으로
+skip하므로, `RBI_LATEST_START_PERIOD`나 `--start-period`를 과거로 당기면 이미
+받은 월은 유지하고 빠진 과거 월만 추가로 받습니다.
+
+```bash
+.venv/bin/rbi update \
+  --start-period 202601 \
+  --end-period 202601
+```
+
+생성되는 clean table:
+
+```text
+clean.clean_inflow
+clean.clean_inflow_sex
+clean.clean_inflow_age
+clean.clean_inflow_sex_age
+clean.clean_outflow
+clean.clean_outflow_sex
+clean.clean_outflow_age
+clean.clean_outflow_sex_age
+```
+
+OD table은 `from_*` 또는 `to_*` 차원이 있어 기존 지역 시계열 dashboard와 analysis option에서는 숨깁니다. 후속 버전에서 OD 전용 API/UI를 붙일 예정입니다.
+
+### Living Population Manual Import
+
+생활인구는 API 자동 다운로드 대상이 아닙니다. 사용자가 CSV를 직접 내려받아 import합니다.
+
+운영에서는 host import directory를 `rbi-web`에 read-only mount합니다.
+
+```ini
+Volume=/srv/rbi/imports:/imports:ro
+```
+
+실행 예:
+
+```bash
+.venv/bin/rbi import living-population \
+  --file /imports/living_population.csv \
+  --export
+```
+
+로컬에서 사용자가 제공한 파일을 시험하려면:
+
+```bash
+.venv/bin/rbi import living-population \
+  --file "docs/생활인구 나이.csv"
+```
+
+`rbi status`는 자동 다운로드 source의 마지막 성공 월과 함께 마지막 생활인구 import 상태를 표시합니다.
+
+원본 wide CSV는 `raw.living_population`에 long format으로 저장합니다. 같은 파일 내용은 SHA-256 hash로 식별합니다. 새 누적 파일이 기존 월과 신규 월을 함께 포함하면, 파일에 포함된 period만 raw에서 교체하고 파일에 없는 기존 period는 유지합니다.
+
+생성되는 clean table:
+
+```text
+clean.clean_living_population
+clean.clean_living_population_age
+```
+
+원본의 `생활인구` 유형은 네 numeric variable로 pivot됩니다.
+
+```text
+living_population
+registered_population
+stay_population
+foreign_population
+```
+
+원본 `*` 값은 0으로 바꾸지 않습니다. raw에는 `value_raw='*'`로 보존하고 clean에서는 해당 numeric value를 `NULL`, 대응 suppression flag를 `true`로 저장합니다.
+
 ## Analysis Queue
 
 The analysis worker uses the same image as the web container and runs Celery:
@@ -313,24 +417,24 @@ saved.saved_analysis
 
 ## Container Image
 
-Build the v0.3.0 image locally:
+Build the v0.3.1 image locally:
 
 ```bash
-podman build -t localhost/rural-basic-income:0.3.0 -f Containerfile .
+podman build -t localhost/rural-basic-income:0.3.1 -f Containerfile .
 ```
 
 Move the image to another machine with a tar archive:
 
 ```bash
-podman save localhost/rural-basic-income:0.3.0 -o rural-basic-income-0.3.0.tar
-rsync -av rural-basic-income-0.3.0.tar user@server:/tmp/
-ssh user@server 'podman load -i /tmp/rural-basic-income-0.3.0.tar'
+podman save localhost/rural-basic-income:0.3.1 -o rural-basic-income-0.3.1.tar
+rsync -av rural-basic-income-0.3.1.tar user@server:/tmp/
+ssh user@server 'podman load -i /tmp/rural-basic-income-0.3.1.tar'
 ```
 
 Or stream it over SSH without leaving a tar file locally:
 
 ```bash
-podman save localhost/rural-basic-income:0.3.0 | ssh user@server 'podman load'
+podman save localhost/rural-basic-income:0.3.1 | ssh user@server 'podman load'
 ```
 
 ## Quadlet Deployment
@@ -339,7 +443,7 @@ The deployment assumes the PostgreSQL volume already exists on the server. Insta
 
 ```bash
 mkdir -p ~/.config/containers/systemd
-mkdir -p export/csv export/dta
+mkdir -p export/csv export/dta imports
 cp deploy/quadlet/rbi-pod.pod \
   deploy/quadlet/rbi-postgres.container \
   deploy/quadlet/rbi-web.container \
@@ -359,6 +463,11 @@ systemctl --user start rbi-analysis.service
 `rbi-web.container` bind mounts the project-local `export/csv/` directory to
 `/export/csv` and `export/dta/` to `/export/dta` inside the container. Sharing
 files are written flat under those two directories.
+
+For living population manual imports, mount a host directory such as
+`/srv/rbi/imports` to `/imports` read-only and put user-downloaded CSV files
+there. The repository template includes `/srv/rbi/imports:/imports:ro`; adjust
+that host path for the target server.
 
 Check the running web service:
 

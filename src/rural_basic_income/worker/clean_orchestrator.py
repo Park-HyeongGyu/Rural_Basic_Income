@@ -103,8 +103,37 @@ CLEAN_DATASETS = (
             "clean_local_currency_sex_age",
         ),
     ),
+    CleanDatasetSpec(
+        "migration_od",
+        PROJECT_ROOT / "sql" / "clean" / "clean_migration_od.sql",
+        (
+            "clean_inflow",
+            "clean_inflow_sex",
+            "clean_inflow_age",
+            "clean_inflow_sex_age",
+            "clean_outflow",
+            "clean_outflow_sex",
+            "clean_outflow_age",
+            "clean_outflow_sex_age",
+        ),
+    ),
+    CleanDatasetSpec(
+        "living_population",
+        PROJECT_ROOT / "sql" / "clean" / "clean_living_population.sql",
+        (
+            "clean_living_population",
+            "clean_living_population_age",
+        ),
+    ),
 )
-DEFAULT_CLEAN_DATASETS = tuple(spec.dataset_name for spec in CLEAN_DATASETS)
+DEFAULT_CLEAN_DATASETS = (
+    "population",
+    "mover",
+    "household",
+    "electricity",
+    "local_currency",
+    "migration_od",
+)
 
 
 def clean_dataset_by_name() -> dict[str, CleanDatasetSpec]:
@@ -147,6 +176,11 @@ def read_sql_statements(path: Path) -> list[str]:
     ]
 
 
+def driver_sql_statement(statement: str) -> str:
+    """Escape DBAPI pyformat percent markers for raw SQL file execution."""
+    return statement.replace("%", "%%")
+
+
 def quote_identifier(identifier: str) -> str:
     if not identifier or "\x00" in identifier:
         raise CleanOrchestratorError(f"invalid SQL identifier: {identifier!r}")
@@ -178,7 +212,7 @@ def delete_clean_periods(
     clean_tables: Sequence[str],
     periods: Sequence[str],
 ) -> int:
-    validated_periods = tuple(iter_month_periods(periods[0], periods[-1]))
+    validated_periods = tuple(str(int(period)) for period in periods)
     period_values = ", ".join(str(int(period)) for period in validated_periods)
     affected_row_count = 0
 
@@ -437,7 +471,7 @@ def clean_dataset_specs(
 
     unknown = sorted(set(requested) - set(specs_by_name))
     if unknown:
-        valid_datasets = ", ".join(DEFAULT_CLEAN_DATASETS)
+        valid_datasets = ", ".join(sorted(specs_by_name))
         raise CleanOrchestratorError(
             f"unknown clean dataset: {', '.join(unknown)}. "
             f"valid datasets: {valid_datasets}"
@@ -502,7 +536,7 @@ def run_sql_file(
                     periods=rebuild_periods,
                 )
                 rebuild_deleted = True
-            result = connection.exec_driver_sql(statement)
+            result = connection.exec_driver_sql(driver_sql_statement(statement))
             if clean_data_statement(statement):
                 row_count = getattr(result, "rowcount", -1)
                 if row_count and row_count > 0:
@@ -539,13 +573,19 @@ def run_clean_datasets(
     rebuild: bool = False,
     start_period: str | None = None,
     end_period: str | None = None,
+    exact_rebuild_periods: Sequence[str] | None = None,
 ) -> tuple[CleanDatasetResult, ...]:
     """Run clean SQL files with each SQL file owning its transaction boundary."""
     db_engine = engine or get_engine()
     specs = clean_dataset_specs(datasets)
     results: list[CleanDatasetResult] = []
     rebuild_periods: tuple[str, ...] = ()
-    if rebuild:
+    if exact_rebuild_periods is not None:
+        rebuild_periods = tuple(str(int(period)) for period in exact_rebuild_periods)
+        if not rebuild_periods:
+            raise CleanOrchestratorError("clean rebuild_periods must not be empty")
+        rebuild = True
+    elif rebuild:
         if not start_period or not end_period:
             raise CleanOrchestratorError(
                 "clean rebuild requires start_period and end_period"
