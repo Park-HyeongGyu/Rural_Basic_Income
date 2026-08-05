@@ -379,7 +379,7 @@ def fetch_migration_od_page(
         )
     if result_code != "0":
         message = f"migration OD API rejected request: {result_code} {result_msg}"
-        if result_code in {"10", "11"}:
+        if result_code == "11":
             raise MigrationOdApiError(message)
         raise SourcePeriodUnavailable(message)
 
@@ -895,6 +895,14 @@ def write_migration_od_source_period(
                 period=validated_period,
                 row_count=raw_row_count,
             )
+    except SourcePeriodUnavailable as exc:
+        LOGGER.warning(
+            "migration OD streaming write unavailable period=%s "
+            "transaction=rollback message=%s",
+            validated_period,
+            exc,
+        )
+        raise
     except Exception:
         LOGGER.exception(
             "migration OD streaming write failed period=%s transaction=rollback",

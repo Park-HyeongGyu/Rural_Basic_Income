@@ -137,6 +137,28 @@ def test_fetch_scope_pages_treats_nodata_as_empty_scope(
     assert rows == []
 
 
+def test_fetch_migration_od_page_treats_invalid_parameter_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        migration_od,
+        "fetch_json_payload",
+        lambda params, **kwargs: make_payload(
+            result_code="10",
+            result_msg="INVALID_REQUEST_PARAMETER_ERROR",
+            rows=None,
+            total_count=0,
+        ),
+    )
+
+    with pytest.raises(SourcePeriodUnavailable, match="INVALID_REQUEST_PARAMETER"):
+        migration_od.fetch_migration_od_page(
+            "202608",
+            destination_code="1100000000",
+            origin_code="1100000000",
+        )
+
+
 def test_download_migration_od_marks_all_nodata_month_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
