@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from http.client import RemoteDisconnected
 from pathlib import Path
 
 import pytest
@@ -156,6 +157,66 @@ def test_fetch_migration_od_page_treats_invalid_parameter_as_unavailable(
             "202608",
             destination_code="1100000000",
             origin_code="1100000000",
+        )
+
+
+def test_fetch_json_payload_retries_remote_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    class ResponseStub:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"Response":{"head":{"resultCode":"0"},"items":""}}'
+
+    def fake_urlopen(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RemoteDisconnected("Remote end closed connection without response")
+        return ResponseStub()
+
+    monkeypatch.setattr(
+        migration_od,
+        "build_migration_od_url",
+        lambda params: "https://example.test",
+    )
+    monkeypatch.setattr(migration_od, "urlopen", fake_urlopen)
+
+    payload = migration_od.fetch_json_payload(
+        {"pageNo": "1"},
+        max_retries=1,
+        base_retry_sleep_seconds=0,
+    )
+
+    assert attempts == 2
+    assert payload["Response"]["head"]["resultCode"] == "0"
+
+
+def test_fetch_json_payload_exhausts_remote_disconnect_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(request, timeout):
+        raise RemoteDisconnected("Remote end closed connection without response")
+
+    monkeypatch.setattr(
+        migration_od,
+        "build_migration_od_url",
+        lambda params: "https://example.test",
+    )
+    monkeypatch.setattr(migration_od, "urlopen", fake_urlopen)
+
+    with pytest.raises(SourcePeriodUnavailable, match="Remote end closed"):
+        migration_od.fetch_json_payload(
+            {"pageNo": "1"},
+            max_retries=1,
+            base_retry_sleep_seconds=0,
         )
 
 

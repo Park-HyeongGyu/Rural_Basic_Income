@@ -6,6 +6,7 @@ import logging
 import math
 import random
 import time
+from http.client import BadStatusLine, IncompleteRead, RemoteDisconnected
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -67,6 +68,15 @@ RETRYABLE_MESSAGE_MARKERS = (
     "timed out",
     "temporarily",
     "try again",
+)
+RETRYABLE_NETWORK_ERRORS = (
+    TimeoutError,
+    URLError,
+    ConnectionResetError,
+    BrokenPipeError,
+    BadStatusLine,
+    IncompleteRead,
+    RemoteDisconnected,
 )
 LOGGER = logging.getLogger(__name__)
 
@@ -248,7 +258,7 @@ def fetch_json_payload(
             if response_text:
                 message = f"{message}: {response_text[:300]}"
             raise SourcePeriodUnavailable(message) from exc
-        except (TimeoutError, URLError) as exc:
+        except RETRYABLE_NETWORK_ERRORS as exc:
             if attempt_index < max_retries:
                 LOGGER.warning(
                     "migration OD request retryable network error attempt=%d/%d "
