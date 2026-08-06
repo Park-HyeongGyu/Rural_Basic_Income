@@ -45,6 +45,12 @@ def test_generated_migration_od_clean_sql_keeps_fast_path_and_guard() -> None:
     assert "no_unmapped_migration_od_region" in sql
     assert "p.destination_sigungu_raw = '영종구'" in sql
     assert "p.origin_sigungu_raw = '영종구'" in sql
+    assert "p.destination_sigungu_raw = '제물포구'" in sql
+    assert "p.origin_sigungu_raw = '제물포구'" in sql
+    assert "p.destination_sigungu_raw = '서해구'" in sql
+    assert "p.origin_sigungu_raw = '서해구'" in sql
+    assert "p.destination_sigungu_raw = '검단구'" in sql
+    assert "p.origin_sigungu_raw = '검단구'" in sql
     assert 'raw_mo."male0AgeNmprCnt"' in sql
     assert 'raw_mo."feml110AgeNmprCnt"' in sql
     assert '"male_0_4"' in sql

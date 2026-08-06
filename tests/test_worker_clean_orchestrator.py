@@ -309,6 +309,91 @@ def test_run_clean_datasets_does_not_bump_revision_on_noop(
     )
 
 
+def test_run_clean_datasets_skips_standard_dataset_with_no_target_periods(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    population_sql = write_sql(
+        tmp_path / "population.sql",
+        "BEGIN; SELECT should_not_run; COMMIT;",
+    )
+    specs = (
+        clean_orchestrator.CleanDatasetSpec(
+            "population",
+            population_sql,
+            ("clean_population",),
+            "raw.population",
+            '"시점"::integer',
+        ),
+    )
+    connection = RecordingConnection(revision=7)
+
+    monkeypatch.setattr(clean_orchestrator, "CLEAN_DATASETS", specs)
+    monkeypatch.setattr(clean_orchestrator, "DEFAULT_CLEAN_DATASETS", ("population",))
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "load_clean_dependencies",
+        lambda connection: {"region_merge_key_rows": 2},
+    )
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "clean_dataset_target_periods",
+        lambda connection, spec, rebuild_periods=(): (),
+    )
+
+    results = clean_orchestrator.run_clean_datasets(
+        ("population",),
+        engine=RecordingEngine(connection),
+    )
+
+    assert results[0].statement_count == 0
+    assert results[0].affected_row_count == 0
+    assert results[0].revision == 7
+    assert results[0].revision_changed is False
+    assert not any(
+        call[0] == "exec_driver_sql" and "should_not_run" in call[1]
+        for call in connection.calls
+    )
+
+
+def test_clean_dataset_missing_periods_checks_all_clean_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = clean_orchestrator.CleanDatasetSpec(
+        "population",
+        Path("population.sql"),
+        ("clean_population", "clean_population_age"),
+        "raw.population",
+        '"시점"::integer',
+    )
+    connection = RecordingConnection()
+
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "clean_dataset_raw_periods",
+        lambda connection, spec: ("202501", "202502"),
+    )
+    monkeypatch.setattr(clean_orchestrator, "relation_exists", lambda *_: True)
+
+    def fake_clean_table_periods(connection, table_name, *, periods):
+        if table_name == "clean_population":
+            return {"202501", "202502"}
+        if table_name == "clean_population_age":
+            return {"202501"}
+        raise AssertionError(table_name)
+
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "clean_table_periods",
+        fake_clean_table_periods,
+    )
+
+    assert clean_orchestrator.clean_dataset_missing_periods(
+        connection,
+        spec,
+    ) == ("202502",)
+
+
 def test_run_clean_datasets_rebuild_deletes_periods_inside_sql_transaction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
