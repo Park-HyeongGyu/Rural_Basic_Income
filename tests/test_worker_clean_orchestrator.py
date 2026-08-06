@@ -9,15 +9,25 @@ from rural_basic_income.worker import clean_orchestrator
 
 
 class ResultStub:
-    def __init__(self, *, rowcount: int = -1, scalar_value: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        rowcount: int = -1,
+        scalar_value: Any = None,
+        rows: list[tuple[Any, ...]] | None = None,
+    ) -> None:
         self.rowcount = rowcount
         self.scalar_value = scalar_value
+        self.rows = rows or []
 
     def scalar_one(self):
         return self.scalar_value
 
     def scalar_one_or_none(self):
         return self.scalar_value
+
+    def fetchall(self):
+        return self.rows
 
 
 class RecordingConnection:
@@ -351,3 +361,91 @@ def test_run_clean_datasets_rebuild_deletes_periods_inside_sql_transaction(
     assert sql_calls[delete_index - 1].startswith("CREATE TABLE")
     assert sql_calls[delete_index + 1].startswith("CREATE TEMP TABLE")
     assert "202601, 202602" in sql_calls[delete_index]
+
+
+def test_run_migration_od_clean_dataset_runs_each_period_separately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_sql = write_sql(tmp_path / "migration_od.sql", "BEGIN; SELECT 1; COMMIT;")
+    spec = clean_orchestrator.CleanDatasetSpec(
+        "migration_od",
+        migration_sql,
+        ("clean_inflow", "clean_outflow"),
+    )
+    connection = RecordingConnection()
+    run_calls: list[tuple[str, str | None]] = []
+
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "migration_od_clean_target_periods",
+        lambda connection, spec, rebuild_periods=(): ("202501", "202502"),
+    )
+
+    def fake_run_sql_file(connection, path, *, dataset_name=None, **kwargs):
+        requested_insert = next(
+            call
+            for call in reversed(connection.calls)
+            if call[0] == "execute"
+            and "INSERT INTO clean_migration_od_requested_dates" in call[1]
+        )
+        run_calls.append((str(path), requested_insert[2]["date"]))
+        return clean_orchestrator.CleanSqlRunResult(
+            statement_count=3,
+            affected_row_count=10,
+            revision=len(run_calls),
+            revision_changed=True,
+        )
+
+    monkeypatch.setattr(clean_orchestrator, "run_sql_file", fake_run_sql_file)
+
+    result = clean_orchestrator.run_migration_od_clean_dataset(connection, spec)
+
+    assert run_calls == [
+        (str(migration_sql), 202501),
+        (str(migration_sql), 202502),
+    ]
+    assert result.statement_count == 6
+    assert result.affected_row_count == 20
+    assert result.revision == 2
+    assert result.revision_changed is True
+    assert [
+        call[1]
+        for call in connection.calls
+        if call[0] == "exec_driver_sql"
+        and call[1] == "TRUNCATE clean_migration_od_requested_dates"
+    ] == [
+        "TRUNCATE clean_migration_od_requested_dates",
+        "TRUNCATE clean_migration_od_requested_dates",
+    ]
+
+
+def test_run_migration_od_clean_dataset_noops_when_no_target_periods(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_sql = write_sql(tmp_path / "migration_od.sql", "BEGIN; SELECT 1; COMMIT;")
+    spec = clean_orchestrator.CleanDatasetSpec(
+        "migration_od",
+        migration_sql,
+        ("clean_inflow", "clean_outflow"),
+    )
+    connection = RecordingConnection(revision=7)
+
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "migration_od_clean_target_periods",
+        lambda connection, spec, rebuild_periods=(): (),
+    )
+
+    result = clean_orchestrator.run_migration_od_clean_dataset(connection, spec)
+
+    assert result.statement_count == 0
+    assert result.affected_row_count == 0
+    assert result.revision == 7
+    assert result.revision_changed is False
+    assert not any(
+        call[0] == "exec_driver_sql"
+        and call[1] == "TRUNCATE clean_migration_od_requested_dates"
+        for call in connection.calls
+    )

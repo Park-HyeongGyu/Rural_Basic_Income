@@ -28,6 +28,11 @@ from rural_basic_income.worker.download import (
     SourcePeriodUnavailable,
 )
 from rural_basic_income.worker.periods import validate_period
+from rural_basic_income.worker.sources.migration_od_schema import (
+    AGE_RAW_COLUMNS,
+    BASIC_RAW_COLUMNS,
+    RAW_COLUMNS,
+)
 
 # Source: data.go.kr 행정안전부 지역별 인구이동 현황.
 SOURCE_NAME = "migration_od"
@@ -63,26 +68,6 @@ RETRYABLE_MESSAGE_MARKERS = (
     "temporarily",
     "try again",
 )
-BASIC_RAW_COLUMNS = (
-    "statsYm",
-    "mvinAdmmCd",
-    "mvinCtpvNm",
-    "mvinSggNm",
-    "mvinDongNm",
-    "mvtAdmmCd",
-    "mvtCtpvNm",
-    "mvtSggNm",
-    "mvtDongNm",
-    "totNmprCnt",
-    "maleNmprCnt",
-    "femlNmprCnt",
-)
-AGE_RAW_COLUMNS = tuple(
-    f"{sex}{age}AgeNmprCnt"
-    for sex in ("male", "feml")
-    for age in range(111)
-)
-RAW_COLUMNS = (*BASIC_RAW_COLUMNS, *AGE_RAW_COLUMNS, "downloaded_at")
 LOGGER = logging.getLogger(__name__)
 
 
