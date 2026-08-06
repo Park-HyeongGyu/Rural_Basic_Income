@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from sqlalchemy.engine import Engine
 from rural_basic_income.db.connection import dispose_engine, get_engine
 from rural_basic_income.worker import clean_orchestrator
 from rural_basic_income.worker import export as csv_export
+from rural_basic_income.worker import notify as worker_notify
 from rural_basic_income.worker import raw_orchestrator
 from rural_basic_income.worker.importers import living_population
 
@@ -640,6 +642,12 @@ def run_import_command(args: argparse.Namespace) -> int:
     raise WorkerCliError(f"unknown import type: {args.import_type}")
 
 
+def command_label(args: argparse.Namespace) -> str:
+    if args.command == "import":
+        return f"import {args.import_type}"
+    return str(args.command)
+
+
 def add_common_source_dataset_options(update_parser: argparse.ArgumentParser) -> None:
     update_parser.add_argument(
         "--sources",
@@ -875,9 +883,16 @@ def main(argv: Sequence[str] | None = None, *, prog: str = "rbi") -> int:
     sys.argv[0] = prog
     parser = build_parser(prog=prog)
     args = parser.parse_args(parsed_argv)
+    started_at = time.monotonic()
     try:
         configure_logging(args.log_level)
-        return args.func(args)
+        result_code = args.func(args)
+        worker_notify.notify_worker_command_success(
+            command=command_label(args),
+            argv=parsed_argv,
+            duration_seconds=time.monotonic() - started_at,
+        )
+        return result_code
     except (
         ValueError,
         WorkerCliError,
@@ -886,7 +901,21 @@ def main(argv: Sequence[str] | None = None, *, prog: str = "rbi") -> int:
         csv_export.ExportError,
         living_population.LivingPopulationImportError,
     ) as exc:
+        worker_notify.notify_worker_command_failure(
+            command=command_label(args),
+            argv=parsed_argv,
+            duration_seconds=time.monotonic() - started_at,
+            error=exc,
+        )
         parser.exit(2, f"rbi: error: {exc}\n")
+    except Exception as exc:
+        worker_notify.notify_worker_command_failure(
+            command=command_label(args),
+            argv=parsed_argv,
+            duration_seconds=time.monotonic() - started_at,
+            error=exc,
+        )
+        raise
     finally:
         dispose_engine()
         sys.argv[0] = original_argv0

@@ -7,11 +7,21 @@ from typing import Any
 
 import pytest
 
+from rural_basic_income.config import get_settings
 from rural_basic_income.worker import cli, clean_orchestrator
 from rural_basic_income.worker import export as csv_export
 from rural_basic_income.worker import raw_orchestrator
 from rural_basic_income.worker.importers import living_population
 from rural_basic_income import cli as root_cli
+
+
+@pytest.fixture(autouse=True)
+def disable_telegram_notifications(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ENABLE_SUCCESS_TELEGRAM", "false")
+    monkeypatch.setenv("ENABLE_FAILURE_TELEGRAM", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 class ScalarResult:
@@ -726,6 +736,65 @@ def test_update_command_requires_periods_without_latest() -> None:
         cli.main(("update", "--sources", "population"))
 
     assert exc_info.value.code == 2
+
+
+def test_main_sends_success_notification_for_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    monkeypatch.setattr(cli, "configure_logging", lambda log_level: None)
+    monkeypatch.setattr(cli, "run_update_command", lambda args: 0)
+    monkeypatch.setattr(
+        cli.worker_notify,
+        "notify_worker_command_success",
+        lambda **kwargs: calls.append(("success", kwargs)),
+    )
+    monkeypatch.setattr(
+        cli.worker_notify,
+        "notify_worker_command_failure",
+        lambda **kwargs: calls.append(("failure", kwargs)),
+    )
+
+    assert cli.main(("update", "--latest")) == 0
+
+    assert len(calls) == 1
+    assert calls[0][0] == "success"
+    assert calls[0][1]["command"] == "update"
+    assert calls[0][1]["argv"] == ("update", "--latest")
+    assert calls[0][1]["duration_seconds"] >= 0
+
+
+def test_main_sends_failure_notification_for_unexpected_update_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+    error = RuntimeError("boom")
+
+    def fail_update_command(args):
+        raise error
+
+    monkeypatch.setattr(cli, "configure_logging", lambda log_level: None)
+    monkeypatch.setattr(cli, "run_update_command", fail_update_command)
+    monkeypatch.setattr(
+        cli.worker_notify,
+        "notify_worker_command_success",
+        lambda **kwargs: calls.append(("success", kwargs)),
+    )
+    monkeypatch.setattr(
+        cli.worker_notify,
+        "notify_worker_command_failure",
+        lambda **kwargs: calls.append(("failure", kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        cli.main(("update", "--latest"))
+
+    assert len(calls) == 1
+    assert calls[0][0] == "failure"
+    assert calls[0][1]["command"] == "update"
+    assert calls[0][1]["argv"] == ("update", "--latest")
+    assert calls[0][1]["error"] is error
 
 
 def test_clean_command_parses_rebuild_periods(
