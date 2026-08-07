@@ -13,10 +13,8 @@ Pod=rbi-pod.pod
 EnvironmentFile=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/.env
 Environment=APP_ENV=production
 Environment=EXPORT_CSV_DIR=/export/csv
-Environment=EXPORT_DTA_DIR=/export/dta
 Environment=RBI_LATEST_START_PERIOD=202501
 Volume=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/export/csv:/export/csv:Z
-Volume=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/export/dta:/export/dta:Z
 # Optional manual imports. Override this host path for production as needed.
 Volume=/srv/rbi/imports:/imports:ro
 Exec=uvicorn rural_basic_income.web.main:app --host 0.0.0.0 --port 8000

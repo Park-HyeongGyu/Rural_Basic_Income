@@ -124,10 +124,11 @@ def print_export_results(
         print("  skipped: no data changes and export files exist", file=output)
         return
 
-    for format_name, format_result in (
-        ("csv", result.csv),
-        ("dta", result.dta),
-    ):
+    export_formats = [("csv", result.csv)]
+    if result.dta is not None:
+        export_formats.append(("dta", result.dta))
+
+    for format_name, format_result in export_formats:
         print(f"  {format_name}: {format_result.export_dir}", file=output)
         for table in format_result.tables:
             print(
@@ -203,8 +204,8 @@ def export_outputs_missing(
     export_dta_dir: str | None = None,
 ) -> bool:
     csv_dir = csv_export.resolve_export_csv_dir(export_csv_dir)
-    dta_dir = csv_export.resolve_export_dta_dir(export_dta_dir)
-    return not export_dir_has_files(csv_dir) or not export_dir_has_files(dta_dir)
+    _ = export_dta_dir
+    return not export_dir_has_files(csv_dir)
 
 
 def should_run_export(
@@ -270,7 +271,7 @@ def run_update(
     export_requested: bool = False,
     export_csv_dir: str | None = None,
     export_dta_dir: str | None = None,
-    export_runner: ExportRunner = csv_export.export_all,
+    export_runner: ExportRunner = csv_export.export_csv_only,
     output: TextIO = sys.stdout,
     lock_update: bool = True,
 ) -> WorkerUpdateResult:
@@ -350,7 +351,7 @@ def run_update_latest(
     export_requested: bool = False,
     export_csv_dir: str | None = None,
     export_dta_dir: str | None = None,
-    export_runner: ExportRunner = csv_export.export_all,
+    export_runner: ExportRunner = csv_export.export_csv_only,
     output: TextIO = sys.stdout,
     lock_update: bool = True,
 ) -> WorkerUpdateResult:
@@ -430,7 +431,7 @@ def run_clean(
     export_requested: bool = False,
     export_csv_dir: str | None = None,
     export_dta_dir: str | None = None,
-    export_runner: ExportRunner = csv_export.export_all,
+    export_runner: ExportRunner = csv_export.export_csv_only,
     output: TextIO = sys.stdout,
 ) -> tuple[clean_orchestrator.CleanDatasetResult, ...]:
     db_engine = engine or get_engine()
@@ -463,7 +464,7 @@ def run_export(
     export_csv_dir: str | None = None,
     export_dta_dir: str | None = None,
     engine: Engine | None = None,
-    export_runner: ExportRunner = csv_export.export_all,
+    export_runner: ExportRunner = csv_export.export_csv_only,
     output: TextIO = sys.stdout,
 ) -> csv_export.ExportRunResult:
     db_engine = engine or get_engine()
@@ -485,7 +486,7 @@ def run_import_living_population(
     export_requested: bool = False,
     export_csv_dir: str | None = None,
     export_dta_dir: str | None = None,
-    export_runner: ExportRunner = csv_export.export_all,
+    export_runner: ExportRunner = csv_export.export_csv_only,
     output: TextIO = sys.stdout,
     lock_update: bool = True,
 ) -> WorkerImportResult:
@@ -724,8 +725,8 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
         "--export",
         action="store_true",
         help=(
-            "export raw and clean CSV and DTA files after the update only "
-            "when raw data was written"
+            "export raw and clean CSV files after the update only when raw "
+            "or clean data changed"
         ),
     )
     update_parser.add_argument(
@@ -734,7 +735,7 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
     )
     update_parser.add_argument(
         "--export-dta-dir",
-        help="directory for flat raw_*.dta and clean_*.dta files",
+        help=argparse.SUPPRESS,
     )
     update_parser.add_argument(
         "--log-level",
@@ -780,7 +781,7 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
     clean_parser.add_argument(
         "--export",
         action="store_true",
-        help="export raw and clean CSV and DTA files after an explicit clean rebuild",
+        help="export raw and clean CSV files after an explicit clean rebuild",
     )
     clean_parser.add_argument(
         "--export-csv-dir",
@@ -788,7 +789,7 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
     )
     clean_parser.add_argument(
         "--export-dta-dir",
-        help="directory for flat raw_*.dta and clean_*.dta files",
+        help=argparse.SUPPRESS,
     )
     clean_parser.set_defaults(func=run_clean_command)
 
@@ -814,7 +815,7 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
 
     export_parser = subparsers.add_parser(
         "export",
-        help="export current raw and clean tables to flat CSV and DTA files",
+        help="export current raw and clean tables to flat CSV files",
     )
     export_parser.add_argument(
         "--export-csv-dir",
@@ -822,7 +823,7 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
     )
     export_parser.add_argument(
         "--export-dta-dir",
-        help="directory for flat raw_*.dta and clean_*.dta files",
+        help=argparse.SUPPRESS,
     )
     export_parser.add_argument(
         "--log-level",
@@ -857,7 +858,7 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
     living_parser.add_argument(
         "--export",
         action="store_true",
-        help="export raw and clean CSV and DTA files after import",
+        help="export raw and clean CSV files after import",
     )
     living_parser.add_argument(
         "--export-csv-dir",
@@ -865,7 +866,7 @@ def build_parser(prog: str = "rbi") -> argparse.ArgumentParser:
     )
     living_parser.add_argument(
         "--export-dta-dir",
-        help="directory for flat raw_*.dta and clean_*.dta files",
+        help=argparse.SUPPRESS,
     )
     living_parser.add_argument(
         "--log-level",

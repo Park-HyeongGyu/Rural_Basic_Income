@@ -77,17 +77,6 @@ def make_export_result(base_dir: str = "/tmp/rbi-export") -> csv_export.ExportRu
                 ),
             ),
         ),
-        dta=csv_export.ExportResult(
-            export_dir=Path(base_dir) / "dta",
-            tables=(
-                csv_export.ExportTableResult(
-                    schema_name="clean",
-                    table_name="clean_population",
-                    file_path=Path(base_dir) / "dta" / "clean_population.dta",
-                    row_count=1,
-                ),
-            ),
-        ),
     )
 
 
@@ -254,21 +243,17 @@ def test_run_update_exports_when_raw_was_written() -> None:
     ]
     assert result.export_result is not None
     assert "csv: /tmp/rbi-export/csv" in output.getvalue()
-    assert "dta: /tmp/rbi-export/dta" in output.getvalue()
     assert "clean.clean_population: clean_population.csv rows=1" in output.getvalue()
-    assert "clean.clean_population: clean_population.dta rows=1" in output.getvalue()
 
 
-def test_run_update_skips_export_when_nothing_was_written_and_exports_exist(
+def test_run_update_skips_export_when_nothing_was_written_and_csv_exists(
     tmp_path: Path,
 ) -> None:
     output = io.StringIO()
     csv_dir = tmp_path / "csv"
     dta_dir = tmp_path / "dta"
     csv_dir.mkdir()
-    dta_dir.mkdir()
     (csv_dir / "clean_population.csv").write_text("date,population\n", encoding="utf-8")
-    (dta_dir / "clean_population.dta").write_bytes(b"dta")
 
     def raw_runner(*args, **kwargs):
         return (

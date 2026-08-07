@@ -34,7 +34,7 @@ v0.2.0에서 구현한 방향:
 - 전력사용량, 지역화폐 결제정보 source 추가
 - 전력사용량, 지역화폐 결제정보 clean SQL 추가
 - 신규 clean table을 기존 웹에서 조회
-- CSV/DTA export 기반 마련
+- CSV export 기반 마련, DTA export prototype 보존
 
 v0.3.0에서 구현한 방향:
 
@@ -54,7 +54,7 @@ v0.3.0에서 구현한 방향:
 - 지도 기반 treatment/control 및 지표 지역 선택
 - 지표와 분석의 저장, 불러오기, 업데이트, 삭제
 - `age`, `sex` checkbox 다중 선택
-- professor-facing CSV/DTA export
+- professor-facing CSV export
 
 v0.3.1에서 구현한 방향:
 
@@ -180,7 +180,6 @@ KOSIS_API_KEY=your-api-key
 KEPCO_API_KEY=your-api-key
 DATA_GO_KR_API_KEY=your-api-key
 EXPORT_CSV_DIR=/export/csv
-EXPORT_DTA_DIR=/export/dta
 RBI_LATEST_START_PERIOD=202501
 ```
 
@@ -207,8 +206,8 @@ Override the scan window when needed:
 .venv/bin/rbi update --latest --start-period 202601 --end-period 202606
 ```
 
-Refresh only missing source-periods and export professor-facing CSV and Stata
-DTA files only when raw data was actually written:
+Refresh only missing source-periods and export professor-facing CSV files only
+when raw or clean data changed:
 
 ```bash
 .venv/bin/rbi update --latest --export
@@ -248,7 +247,7 @@ Rebuild existing clean rows only through the explicit clean command:
 ```
 
 Add `--export` to an explicit clean rebuild when the rebuilt clean tables should
-replace the shared CSV and DTA files:
+replace the shared CSV files:
 
 ```bash
 .venv/bin/rbi clean \
@@ -259,19 +258,20 @@ replace the shared CSV and DTA files:
   --export
 ```
 
-Export the current `raw` and `clean` schemas to both CSV and Stata DTA without
-downloading or rebuilding data:
+Export the current `raw` and `clean` schemas to CSV without downloading or
+rebuilding data:
 
 ```bash
 .venv/bin/rbi export
 ```
 
-Export writes only the latest flat files to `EXPORT_CSV_DIR` and
-`EXPORT_DTA_DIR`, which default to `/export/csv` and `/export/dta` inside the
-container. It exports `raw.*` and `clean.*` only; `raw_json` and `metadata` are
-intentionally not exported. File names are flat, for example
-`raw_population.csv`, `raw_population.dta`, `clean_population.csv`, and
-`clean_population.dta`.
+Export writes only the latest flat CSV files to `EXPORT_CSV_DIR`, which defaults
+to `/export/csv` inside the container. It exports `raw.*` and `clean.*` only;
+`raw_json` and `metadata` are intentionally not exported. File names are flat,
+for example `raw_population.csv` and `clean_population.csv`. The Stata DTA
+export module is still present in the codebase for a future restore, but the
+public CLI does not call it by default because large OD tables can exceed server
+memory.
 
 Inspect source download status:
 
@@ -443,7 +443,7 @@ The deployment assumes the PostgreSQL volume already exists on the server. Insta
 
 ```bash
 mkdir -p ~/.config/containers/systemd
-mkdir -p export/csv export/dta imports
+mkdir -p export/csv imports
 cp deploy/quadlet/rbi-pod.pod \
   deploy/quadlet/rbi-postgres.container \
   deploy/quadlet/rbi-web.container \
@@ -461,8 +461,8 @@ systemctl --user start rbi-analysis.service
 `rbi-pod.pod` publishes the web service on `127.0.0.1:8000` and PostgreSQL on `127.0.0.1:5432`. Redis is kept inside the shared pod network and is not published to the host by default. The web, database, Redis, and analysis containers share the pod network namespace, so the existing local `127.0.0.1` service settings work inside the deployment pod.
 
 `rbi-web.container` bind mounts the project-local `export/csv/` directory to
-`/export/csv` and `export/dta/` to `/export/dta` inside the container. Sharing
-files are written flat under those two directories.
+`/export/csv` inside the container. Sharing files are written flat under that
+directory.
 
 For living population manual imports, mount a host directory such as
 `/srv/rbi/imports` to `/imports` read-only and put user-downloaded CSV files
@@ -492,8 +492,8 @@ On the server, the default `--latest` scan start is controlled by
 in `.env` or `deploy/quadlet/rbi-web.container`, then reload/restart the user
 service before the next update.
 
-Run an update and refresh the shared CSV and DTA files only if new raw data was
-written:
+Run an update and refresh the shared CSV files only if raw or clean data
+changed:
 
 ```bash
 podman exec rbi-web rbi update --latest --export

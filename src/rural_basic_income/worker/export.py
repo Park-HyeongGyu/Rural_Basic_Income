@@ -58,7 +58,7 @@ class ExportResult:
 @dataclass(frozen=True)
 class ExportRunResult:
     csv: ExportResult
-    dta: ExportResult
+    dta: ExportResult | None = None
 
 
 def quote_identifier(identifier: str) -> str:
@@ -366,6 +366,24 @@ def export_dta(
         len(published_results),
     )
     return ExportResult(export_dir=target_dir, tables=published_results)
+
+
+def export_csv_only(
+    *,
+    schemas: tuple[str, ...] = DEFAULT_EXPORT_SCHEMAS,
+    export_csv_dir: str | Path | None = None,
+    export_dta_dir: str | Path | None = None,
+    engine: Engine | None = None,
+) -> ExportRunResult:
+    # DTA export is intentionally kept as a module-level function but not run
+    # from the public CLI by default because large OD tables can exceed server RAM.
+    _ = export_dta_dir
+    csv_result = export_csv(
+        schemas=schemas,
+        export_csv_dir=export_csv_dir,
+        engine=engine,
+    )
+    return ExportRunResult(csv=csv_result)
 
 
 def export_all(

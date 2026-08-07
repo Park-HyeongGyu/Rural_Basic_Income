@@ -18,7 +18,9 @@ Integration release. v0.3.0 already includes:
 - update-level PostgreSQL advisory lock
 - host user systemd timer templates that call
   `podman exec rbi-web rbi update --latest --export`
-- CSV and Stata DTA export for `raw.*` and `clean.*`
+- CSV export for `raw.*` and `clean.*`; the Stata DTA export code is retained
+  but no longer invoked by the public CLI because large OD tables can exceed
+  server memory
 - Redis/Celery async analysis jobs
 - `rbi-redis` and `rbi-analysis` Quadlet examples
 - traditional TWFE DiD and traditional TWFE Event Study via PyFixest
@@ -79,8 +81,9 @@ and no new analysis estimator.
 - Data updates are run by host user systemd through `podman exec rbi-web ...`.
 - Do not use Celery for data updates.
 - Do not bring back a scheduled updater container.
-- `rbi export` writes latest flat CSV/DTA files for `raw.*` and `clean.*` only;
-  it intentionally excludes `raw_json` and `metadata`.
+- `rbi export` writes latest flat CSV files for `raw.*` and `clean.*` only; it
+  intentionally excludes `raw_json` and `metadata`. Stata DTA export functions
+  remain in the codebase but are not called by the public CLI.
 - `migration_od` is included in the default `rbi update --latest` raw source and
   clean dataset list. Existing successful source-periods must still be skipped.
 - `living_population` is a manual file import source and must not be included

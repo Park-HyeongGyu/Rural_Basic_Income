@@ -131,6 +131,25 @@ def test_export_csv_writes_flat_latest_raw_and_clean_files(tmp_path: Path) -> No
     assert not any(path.is_dir() for path in target_dir.iterdir())
 
 
+def test_export_csv_only_does_not_write_dta_files(tmp_path: Path) -> None:
+    csv_dir = tmp_path / "csv"
+    dta_dir = tmp_path / "dta"
+
+    result = export.export_csv_only(
+        export_csv_dir=csv_dir,
+        export_dta_dir=dta_dir,
+        engine=FakeEngine(FakeConnection()),
+    )
+
+    assert result.csv.export_dir == csv_dir
+    assert result.dta is None
+    assert sorted(path.name for path in csv_dir.iterdir()) == [
+        "clean_population.csv",
+        "raw_population.csv",
+    ]
+    assert not dta_dir.exists()
+
+
 def test_publish_export_directory_keeps_target_directory_in_place(tmp_path: Path) -> None:
     target_dir = tmp_path / "csv"
     target_dir.mkdir()
