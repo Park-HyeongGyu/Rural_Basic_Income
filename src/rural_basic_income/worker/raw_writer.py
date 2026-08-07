@@ -213,6 +213,10 @@ def period_delete_predicate(
     column_set = set(columns)
     if "시점" in column_set:
         return f"{quote_identifier('시점')} = :period", {"period": period}
+    if "statsYm" in column_set:
+        return f"{quote_identifier('statsYm')} = :period", {"period": period}
+    if "period" in column_set:
+        return f"{quote_identifier('period')} = :period", {"period": period}
     if "crtr_ym" in column_set:
         return f"{quote_identifier('crtr_ym')} = :period", {"period": period}
     if {"year", "month"}.issubset(column_set):

@@ -24,6 +24,7 @@ from rural_basic_income.worker.sources import (
     electricity,
     household,
     local_currency,
+    migration_od,
     mover,
     population,
 )
@@ -46,6 +47,7 @@ DEFAULT_RAW_SOURCES = (
     "mover",
     "electricity",
     "local_currency",
+    "migration_od",
 )
 DEFAULT_LATEST_START_PERIOD = "202501"
 
@@ -55,6 +57,7 @@ SOURCE_DOWNLOADERS: dict[str, DownloadFunction] = {
     "mover": mover.download_mover,
     "electricity": electricity.download_electricity,
     "local_currency": local_currency.download_local_currency,
+    "migration_od": migration_od.download_migration_od,
 }
 
 
@@ -124,6 +127,11 @@ SOURCE_METADATA: dict[str, RawSourceMetadata] = {
         source_name=local_currency.SOURCE_NAME,
         source_name_kor=local_currency.SOURCE_NAME_KOR,
         source_table_id=local_currency.SOURCE_TABLE_ID,
+    ),
+    "migration_od": RawSourceMetadata(
+        source_name=migration_od.SOURCE_NAME,
+        source_name_kor=migration_od.SOURCE_NAME_KOR,
+        source_table_id=migration_od.SOURCE_TABLE_ID,
     ),
 }
 
@@ -344,6 +352,59 @@ def _refresh_source_period(
                 period=validated_period,
                 status="skipped_existing",
                 row_count=existing_row_count,
+            ),
+            None,
+        )
+
+    if (
+        source_name == migration_od.SOURCE_NAME
+        and downloaders is None
+        and writer is raw_writer.write_source_period_download
+    ):
+        try:
+            write_result = migration_od.write_migration_od_source_period(
+                validated_period,
+                engine=db_engine,
+                force=force,
+                **dict(source_options or {}),
+            )
+        except Exception as exc:
+            unavailable_message = source_period_unavailable_message(exc)
+            if allow_unavailable and unavailable_message:
+                if force and existing_row_count is not None:
+                    return preserve_existing_source_period_after_unavailable(
+                        source_name=source_name,
+                        period=validated_period,
+                        row_count=existing_row_count,
+                        message=unavailable_message,
+                    )
+                return mark_unavailable_source_period(
+                    source_name=source_name,
+                    period=validated_period,
+                    message=unavailable_message,
+                    engine=db_engine,
+                )
+            raise
+
+        status: RawRefreshStatus
+        if write_result.status == "written":
+            status = "downloaded_written"
+        else:
+            status = "downloaded_skipped"
+
+        LOGGER.info(
+            "raw refresh source-period complete source=%s period=%s status=%s rows=%d",
+            write_result.source_name,
+            write_result.period,
+            status,
+            write_result.row_count,
+        )
+        return (
+            RawRefreshResult(
+                source_name=write_result.source_name,
+                period=write_result.period,
+                status=status,
+                row_count=write_result.row_count,
             ),
             None,
         )

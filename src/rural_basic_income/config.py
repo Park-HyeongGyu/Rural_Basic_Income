@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     kosis_api_key: str | None = None
     kepco_api_key: str | None = None
     data_go_kr_api_key: str | None = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    enable_success_telegram: bool = False
+    enable_failure_telegram: bool = False
     redis_url: str = "redis://127.0.0.1:6379/0"
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None

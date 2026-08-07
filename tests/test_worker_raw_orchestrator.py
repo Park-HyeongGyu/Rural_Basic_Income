@@ -569,6 +569,52 @@ def test_refresh_raw_range_records_unavailable_periods_and_continues(
     assert metadata_calls[1]["period"] == "202606"
 
 
+def test_refresh_source_period_records_unavailable_migration_od_streaming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "source_period_success_row_count",
+        lambda source_name, period, *, engine=None: None,
+    )
+
+    metadata_calls: list[dict[str, Any]] = []
+
+    def fake_mark_source_period_unavailable(**kwargs):
+        metadata_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        raw_writer,
+        "mark_source_period_unavailable",
+        fake_mark_source_period_unavailable,
+    )
+
+    def unavailable_migration_od(period: str, **kwargs):
+        assert period == "202608"
+        raise SourcePeriodUnavailable(
+            "migration OD API rejected request: "
+            "10 INVALID_REQUEST_PARAMETER_ERROR"
+        )
+
+    monkeypatch.setattr(
+        raw_orchestrator.migration_od,
+        "write_migration_od_source_period",
+        unavailable_migration_od,
+    )
+
+    result = raw_orchestrator.refresh_source_period(
+        "migration_od",
+        "202608",
+        engine=object(),
+    )
+
+    assert result.status == "skipped_unavailable"
+    assert result.unavailable
+    assert metadata_calls[0]["source_name"] == "migration_od"
+    assert metadata_calls[0]["period"] == "202608"
+    assert "INVALID_REQUEST_PARAMETER" in metadata_calls[0]["error_message"]
+
+
 def test_refresh_raw_range_can_fail_on_unavailable_when_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

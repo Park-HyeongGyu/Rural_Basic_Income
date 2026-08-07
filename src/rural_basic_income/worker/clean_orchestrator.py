@@ -42,6 +42,8 @@ class CleanDatasetSpec:
     dataset_name: str
     sql_file: Path
     clean_tables: tuple[str, ...]
+    raw_relation: str | None = None
+    raw_period_expression: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,8 @@ CLEAN_DATASETS = (
             "clean_population_age",
             "clean_population_sex_age",
         ),
+        "raw.population",
+        '"시점"::integer',
     ),
     CleanDatasetSpec(
         "mover",
@@ -82,16 +86,22 @@ CLEAN_DATASETS = (
             "clean_mover_age",
             "clean_mover_sex_age",
         ),
+        "raw.mover",
+        '"시점"::integer',
     ),
     CleanDatasetSpec(
         "household",
         PROJECT_ROOT / "sql" / "clean" / "clean_household.sql",
         ("clean_household",),
+        "raw.household",
+        '"시점"::integer',
     ),
     CleanDatasetSpec(
         "electricity",
         PROJECT_ROOT / "sql" / "clean" / "clean_electricity.sql",
         ("clean_electricity",),
+        "raw.electricity",
+        "(btrim(year) || lpad(btrim(month), 2, '0'))::integer",
     ),
     CleanDatasetSpec(
         "local_currency",
@@ -102,9 +112,44 @@ CLEAN_DATASETS = (
             "clean_local_currency_age",
             "clean_local_currency_sex_age",
         ),
+        "raw.local_currency",
+        "crtr_ym::integer",
+    ),
+    CleanDatasetSpec(
+        "migration_od",
+        PROJECT_ROOT / "sql" / "clean" / "clean_migration_od.sql",
+        (
+            "clean_inflow",
+            "clean_inflow_sex",
+            "clean_inflow_age",
+            "clean_inflow_sex_age",
+            "clean_outflow",
+            "clean_outflow_sex",
+            "clean_outflow_age",
+            "clean_outflow_sex_age",
+        ),
+        "raw.migration_od",
+        '"statsYm"::integer',
+    ),
+    CleanDatasetSpec(
+        "living_population",
+        PROJECT_ROOT / "sql" / "clean" / "clean_living_population.sql",
+        (
+            "clean_living_population",
+            "clean_living_population_age",
+        ),
+        "raw.living_population",
+        "period::integer",
     ),
 )
-DEFAULT_CLEAN_DATASETS = tuple(spec.dataset_name for spec in CLEAN_DATASETS)
+DEFAULT_CLEAN_DATASETS = (
+    "population",
+    "mover",
+    "household",
+    "electricity",
+    "local_currency",
+    "migration_od",
+)
 
 
 def clean_dataset_by_name() -> dict[str, CleanDatasetSpec]:
@@ -147,6 +192,11 @@ def read_sql_statements(path: Path) -> list[str]:
     ]
 
 
+def driver_sql_statement(statement: str) -> str:
+    """Escape DBAPI pyformat percent markers for raw SQL file execution."""
+    return statement.replace("%", "%%")
+
+
 def quote_identifier(identifier: str) -> str:
     if not identifier or "\x00" in identifier:
         raise CleanOrchestratorError(f"invalid SQL identifier: {identifier!r}")
@@ -178,7 +228,7 @@ def delete_clean_periods(
     clean_tables: Sequence[str],
     periods: Sequence[str],
 ) -> int:
-    validated_periods = tuple(iter_month_periods(periods[0], periods[-1]))
+    validated_periods = tuple(str(int(period)) for period in periods)
     period_values = ", ".join(str(int(period)) for period in validated_periods)
     affected_row_count = 0
 
@@ -437,7 +487,7 @@ def clean_dataset_specs(
 
     unknown = sorted(set(requested) - set(specs_by_name))
     if unknown:
-        valid_datasets = ", ".join(DEFAULT_CLEAN_DATASETS)
+        valid_datasets = ", ".join(sorted(specs_by_name))
         raise CleanOrchestratorError(
             f"unknown clean dataset: {', '.join(unknown)}. "
             f"valid datasets: {valid_datasets}"
@@ -502,7 +552,7 @@ def run_sql_file(
                     periods=rebuild_periods,
                 )
                 rebuild_deleted = True
-            result = connection.exec_driver_sql(statement)
+            result = connection.exec_driver_sql(driver_sql_statement(statement))
             if clean_data_statement(statement):
                 row_count = getattr(result, "rowcount", -1)
                 if row_count and row_count > 0:
@@ -532,6 +582,330 @@ def run_sql_file(
     )
 
 
+def relation_exists(connection: Connection, relation_name: str) -> bool:
+    relation = connection.execute(
+        text("SELECT to_regclass(:relation_name)"),
+        {"relation_name": relation_name},
+    ).scalar_one_or_none()
+    return relation is not None
+
+
+def clean_dataset_raw_periods(
+    connection: Connection,
+    spec: CleanDatasetSpec,
+    *,
+    periods: Sequence[str] = (),
+) -> tuple[str, ...] | None:
+    if spec.raw_relation is None or spec.raw_period_expression is None:
+        return None
+    if not relation_exists(connection, spec.raw_relation):
+        return ()
+
+    where_clause = ""
+    if periods:
+        period_values = ", ".join(str(int(period)) for period in periods)
+        where_clause = f"WHERE {spec.raw_period_expression} IN ({period_values})"
+
+    rows = connection.exec_driver_sql(
+        f"""
+        SELECT DISTINCT {spec.raw_period_expression} AS date
+        FROM {spec.raw_relation}
+        {where_clause}
+        ORDER BY date
+        """
+    ).fetchall()
+    return tuple(str(int(row[0])) for row in rows)
+
+
+def clean_table_periods(
+    connection: Connection,
+    table_name: str,
+    *,
+    periods: Sequence[str],
+) -> set[str]:
+    if not relation_exists(connection, f"clean.{table_name}"):
+        return set()
+
+    where_clause = ""
+    if periods:
+        period_values = ", ".join(str(int(period)) for period in periods)
+        where_clause = f"WHERE date IN ({period_values})"
+
+    rows = connection.exec_driver_sql(
+        f"""
+        SELECT DISTINCT date
+        FROM clean.{quote_identifier(table_name)}
+        {where_clause}
+        """
+    ).fetchall()
+    return {str(int(row[0])) for row in rows}
+
+
+def clean_dataset_missing_periods(
+    connection: Connection,
+    spec: CleanDatasetSpec,
+) -> tuple[str, ...] | None:
+    raw_periods = clean_dataset_raw_periods(connection, spec)
+    if raw_periods is None:
+        return None
+    if not raw_periods:
+        return ()
+
+    missing_tables = [
+        table_name
+        for table_name in spec.clean_tables
+        if not relation_exists(connection, f"clean.{table_name}")
+    ]
+    if missing_tables:
+        LOGGER.info(
+            "%s clean target all raw periods because clean tables are missing "
+            "tables=%s",
+            spec.dataset_name,
+            tuple(missing_tables),
+        )
+        return raw_periods
+
+    complete_periods = set(raw_periods)
+    for table_name in spec.clean_tables:
+        complete_periods &= clean_table_periods(
+            connection,
+            table_name,
+            periods=raw_periods,
+        )
+
+    return tuple(period for period in raw_periods if period not in complete_periods)
+
+
+def clean_dataset_target_periods(
+    connection: Connection,
+    spec: CleanDatasetSpec,
+    *,
+    rebuild_periods: Sequence[str] = (),
+) -> tuple[str, ...] | None:
+    if rebuild_periods:
+        return clean_dataset_raw_periods(connection, spec, periods=rebuild_periods)
+    return clean_dataset_missing_periods(connection, spec)
+
+
+def run_standard_clean_dataset(
+    connection: Connection,
+    spec: CleanDatasetSpec,
+    *,
+    rebuild_periods: Sequence[str] = (),
+) -> CleanSqlRunResult:
+    target_periods = clean_dataset_target_periods(
+        connection,
+        spec,
+        rebuild_periods=rebuild_periods,
+    )
+    if target_periods is None:
+        return run_sql_file(
+            connection,
+            spec.sql_file,
+            dataset_name=spec.dataset_name,
+            rebuild_tables=spec.clean_tables if rebuild_periods else (),
+            rebuild_periods=rebuild_periods,
+        )
+
+    if not target_periods:
+        revision = fetch_clean_dataset_revision(
+            connection,
+            dataset_name=spec.dataset_name,
+        )
+        LOGGER.info(
+            "%s clean no target periods revision=%s",
+            spec.dataset_name,
+            revision,
+        )
+        return CleanSqlRunResult(
+            statement_count=0,
+            affected_row_count=0,
+            revision=revision,
+            revision_changed=False,
+        )
+
+    LOGGER.info(
+        "%s clean target periods=%s",
+        spec.dataset_name,
+        target_periods,
+    )
+    return run_sql_file(
+        connection,
+        spec.sql_file,
+        dataset_name=spec.dataset_name,
+        rebuild_tables=spec.clean_tables if rebuild_periods else (),
+        rebuild_periods=target_periods if rebuild_periods else (),
+    )
+
+
+def raw_migration_od_periods(
+    connection: Connection,
+    *,
+    periods: Sequence[str] = (),
+) -> tuple[str, ...]:
+    if not relation_exists(connection, "raw.migration_od"):
+        return ()
+
+    where_clause = ""
+    if periods:
+        period_values = ", ".join(str(int(period)) for period in periods)
+        where_clause = f'WHERE "statsYm"::integer IN ({period_values})'
+
+    rows = connection.exec_driver_sql(
+        f"""
+        SELECT DISTINCT "statsYm"::integer AS date
+        FROM raw.migration_od
+        {where_clause}
+        ORDER BY date
+        """
+    ).fetchall()
+    return tuple(str(int(row[0])) for row in rows)
+
+
+def migration_od_clean_missing_periods(
+    connection: Connection,
+    spec: CleanDatasetSpec,
+) -> tuple[str, ...]:
+    raw_periods = raw_migration_od_periods(connection)
+    if not raw_periods:
+        return ()
+
+    missing_tables = [
+        table_name
+        for table_name in spec.clean_tables
+        if not relation_exists(connection, f"clean.{table_name}")
+    ]
+    if missing_tables:
+        LOGGER.info(
+            "migration_od clean target all raw periods because clean tables "
+            "are missing tables=%s",
+            tuple(missing_tables),
+        )
+        return raw_periods
+
+    missing_predicates = "\nOR ".join(
+        f"""
+        NOT EXISTS (
+            SELECT 1
+            FROM clean.{quote_identifier(table_name)} AS existing
+            WHERE existing.date = raw_dates.date
+        )
+        """.strip()
+        for table_name in spec.clean_tables
+    )
+    rows = connection.exec_driver_sql(
+        f"""
+        WITH raw_dates AS (
+            SELECT DISTINCT "statsYm"::integer AS date
+            FROM raw.migration_od
+        )
+        SELECT raw_dates.date
+        FROM raw_dates
+        WHERE {missing_predicates}
+        ORDER BY raw_dates.date
+        """
+    ).fetchall()
+    return tuple(str(int(row[0])) for row in rows)
+
+
+def migration_od_clean_target_periods(
+    connection: Connection,
+    spec: CleanDatasetSpec,
+    *,
+    rebuild_periods: Sequence[str] = (),
+) -> tuple[str, ...]:
+    if rebuild_periods:
+        return raw_migration_od_periods(connection, periods=rebuild_periods)
+    return migration_od_clean_missing_periods(connection, spec)
+
+
+def set_migration_od_requested_period(
+    connection: Connection,
+    period: str,
+) -> None:
+    connection.exec_driver_sql(
+        """
+        CREATE TEMP TABLE IF NOT EXISTS clean_migration_od_requested_dates (
+            date integer PRIMARY KEY
+        ) ON COMMIT PRESERVE ROWS
+        """
+    )
+    connection.exec_driver_sql("TRUNCATE clean_migration_od_requested_dates")
+    connection.execute(
+        text(
+            """
+            INSERT INTO clean_migration_od_requested_dates (date)
+            VALUES (:date)
+            """
+        ),
+        {"date": int(period)},
+    )
+
+
+def run_migration_od_clean_dataset(
+    connection: Connection,
+    spec: CleanDatasetSpec,
+    *,
+    rebuild_periods: Sequence[str] = (),
+) -> CleanSqlRunResult:
+    target_periods = migration_od_clean_target_periods(
+        connection,
+        spec,
+        rebuild_periods=rebuild_periods,
+    )
+    if not target_periods:
+        revision = fetch_clean_dataset_revision(
+            connection,
+            dataset_name=spec.dataset_name,
+        )
+        LOGGER.info(
+            "migration_od clean no target periods revision=%s",
+            revision,
+        )
+        return CleanSqlRunResult(
+            statement_count=0,
+            affected_row_count=0,
+            revision=revision,
+            revision_changed=False,
+        )
+
+    LOGGER.info(
+        "migration_od clean target periods=%s",
+        target_periods,
+    )
+    statement_count = 0
+    affected_row_count = 0
+    revision: int | None = None
+    revision_changed = False
+    for period in target_periods:
+        LOGGER.info("migration_od clean period start period=%s", period)
+        set_migration_od_requested_period(connection, period)
+        sql_result = run_sql_file(
+            connection,
+            spec.sql_file,
+            dataset_name=spec.dataset_name,
+        )
+        statement_count += sql_result.statement_count
+        affected_row_count += sql_result.affected_row_count
+        revision = sql_result.revision
+        revision_changed = revision_changed or sql_result.revision_changed
+        LOGGER.info(
+            "migration_od clean period complete period=%s affected_rows=%d "
+            "revision=%s revision_changed=%s",
+            period,
+            sql_result.affected_row_count,
+            sql_result.revision,
+            sql_result.revision_changed,
+        )
+
+    return CleanSqlRunResult(
+        statement_count=statement_count,
+        affected_row_count=affected_row_count,
+        revision=revision,
+        revision_changed=revision_changed,
+    )
+
+
 def run_clean_datasets(
     datasets: Sequence[str] | None = None,
     *,
@@ -539,13 +913,19 @@ def run_clean_datasets(
     rebuild: bool = False,
     start_period: str | None = None,
     end_period: str | None = None,
+    exact_rebuild_periods: Sequence[str] | None = None,
 ) -> tuple[CleanDatasetResult, ...]:
     """Run clean SQL files with each SQL file owning its transaction boundary."""
     db_engine = engine or get_engine()
     specs = clean_dataset_specs(datasets)
     results: list[CleanDatasetResult] = []
     rebuild_periods: tuple[str, ...] = ()
-    if rebuild:
+    if exact_rebuild_periods is not None:
+        rebuild_periods = tuple(str(int(period)) for period in exact_rebuild_periods)
+        if not rebuild_periods:
+            raise CleanOrchestratorError("clean rebuild_periods must not be empty")
+        rebuild = True
+    elif rebuild:
         if not start_period or not end_period:
             raise CleanOrchestratorError(
                 "clean rebuild requires start_period and end_period"
@@ -577,13 +957,18 @@ def run_clean_datasets(
                     spec.dataset_name,
                     spec.sql_file,
                 )
-                sql_result = run_sql_file(
-                    connection,
-                    spec.sql_file,
-                    dataset_name=spec.dataset_name,
-                    rebuild_tables=spec.clean_tables if rebuild else (),
-                    rebuild_periods=rebuild_periods,
-                )
+                if spec.dataset_name == "migration_od":
+                    sql_result = run_migration_od_clean_dataset(
+                        connection,
+                        spec,
+                        rebuild_periods=rebuild_periods,
+                    )
+                else:
+                    sql_result = run_standard_clean_dataset(
+                        connection,
+                        spec,
+                        rebuild_periods=rebuild_periods,
+                    )
                 results.append(
                     CleanDatasetResult(
                         dataset_name=spec.dataset_name,

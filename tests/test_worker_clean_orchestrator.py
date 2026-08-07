@@ -9,15 +9,25 @@ from rural_basic_income.worker import clean_orchestrator
 
 
 class ResultStub:
-    def __init__(self, *, rowcount: int = -1, scalar_value: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        rowcount: int = -1,
+        scalar_value: Any = None,
+        rows: list[tuple[Any, ...]] | None = None,
+    ) -> None:
         self.rowcount = rowcount
         self.scalar_value = scalar_value
+        self.rows = rows or []
 
     def scalar_one(self):
         return self.scalar_value
 
     def scalar_one_or_none(self):
         return self.scalar_value
+
+    def fetchall(self):
+        return self.rows
 
 
 class RecordingConnection:
@@ -177,6 +187,27 @@ def test_clean_dataset_specs_rejects_unknown_dataset() -> None:
         clean_orchestrator.clean_dataset_specs(("not_a_dataset",))
 
 
+def test_clean_dataset_registry_includes_od_and_keeps_manual_out_of_default() -> None:
+    dataset_names = {
+        spec.dataset_name
+        for spec in clean_orchestrator.clean_dataset_specs(
+            ("migration_od", "living_population")
+        )
+    }
+
+    assert dataset_names == {"migration_od", "living_population"}
+    assert "migration_od" in clean_orchestrator.DEFAULT_CLEAN_DATASETS
+    assert "living_population" not in clean_orchestrator.DEFAULT_CLEAN_DATASETS
+
+
+def test_driver_sql_statement_escapes_percent_for_psycopg_raw_execution() -> None:
+    statement = "SELECT * FROM raw.migration_od WHERE name LIKE '%시 %구'"
+
+    assert clean_orchestrator.driver_sql_statement(statement) == (
+        "SELECT * FROM raw.migration_od WHERE name LIKE '%%시 %%구'"
+    )
+
+
 def test_run_clean_datasets_bumps_revision_when_clean_rows_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -278,6 +309,91 @@ def test_run_clean_datasets_does_not_bump_revision_on_noop(
     )
 
 
+def test_run_clean_datasets_skips_standard_dataset_with_no_target_periods(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    population_sql = write_sql(
+        tmp_path / "population.sql",
+        "BEGIN; SELECT should_not_run; COMMIT;",
+    )
+    specs = (
+        clean_orchestrator.CleanDatasetSpec(
+            "population",
+            population_sql,
+            ("clean_population",),
+            "raw.population",
+            '"시점"::integer',
+        ),
+    )
+    connection = RecordingConnection(revision=7)
+
+    monkeypatch.setattr(clean_orchestrator, "CLEAN_DATASETS", specs)
+    monkeypatch.setattr(clean_orchestrator, "DEFAULT_CLEAN_DATASETS", ("population",))
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "load_clean_dependencies",
+        lambda connection: {"region_merge_key_rows": 2},
+    )
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "clean_dataset_target_periods",
+        lambda connection, spec, rebuild_periods=(): (),
+    )
+
+    results = clean_orchestrator.run_clean_datasets(
+        ("population",),
+        engine=RecordingEngine(connection),
+    )
+
+    assert results[0].statement_count == 0
+    assert results[0].affected_row_count == 0
+    assert results[0].revision == 7
+    assert results[0].revision_changed is False
+    assert not any(
+        call[0] == "exec_driver_sql" and "should_not_run" in call[1]
+        for call in connection.calls
+    )
+
+
+def test_clean_dataset_missing_periods_checks_all_clean_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = clean_orchestrator.CleanDatasetSpec(
+        "population",
+        Path("population.sql"),
+        ("clean_population", "clean_population_age"),
+        "raw.population",
+        '"시점"::integer',
+    )
+    connection = RecordingConnection()
+
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "clean_dataset_raw_periods",
+        lambda connection, spec: ("202501", "202502"),
+    )
+    monkeypatch.setattr(clean_orchestrator, "relation_exists", lambda *_: True)
+
+    def fake_clean_table_periods(connection, table_name, *, periods):
+        if table_name == "clean_population":
+            return {"202501", "202502"}
+        if table_name == "clean_population_age":
+            return {"202501"}
+        raise AssertionError(table_name)
+
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "clean_table_periods",
+        fake_clean_table_periods,
+    )
+
+    assert clean_orchestrator.clean_dataset_missing_periods(
+        connection,
+        spec,
+    ) == ("202502",)
+
+
 def test_run_clean_datasets_rebuild_deletes_periods_inside_sql_transaction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -330,3 +446,91 @@ def test_run_clean_datasets_rebuild_deletes_periods_inside_sql_transaction(
     assert sql_calls[delete_index - 1].startswith("CREATE TABLE")
     assert sql_calls[delete_index + 1].startswith("CREATE TEMP TABLE")
     assert "202601, 202602" in sql_calls[delete_index]
+
+
+def test_run_migration_od_clean_dataset_runs_each_period_separately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_sql = write_sql(tmp_path / "migration_od.sql", "BEGIN; SELECT 1; COMMIT;")
+    spec = clean_orchestrator.CleanDatasetSpec(
+        "migration_od",
+        migration_sql,
+        ("clean_inflow", "clean_outflow"),
+    )
+    connection = RecordingConnection()
+    run_calls: list[tuple[str, str | None]] = []
+
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "migration_od_clean_target_periods",
+        lambda connection, spec, rebuild_periods=(): ("202501", "202502"),
+    )
+
+    def fake_run_sql_file(connection, path, *, dataset_name=None, **kwargs):
+        requested_insert = next(
+            call
+            for call in reversed(connection.calls)
+            if call[0] == "execute"
+            and "INSERT INTO clean_migration_od_requested_dates" in call[1]
+        )
+        run_calls.append((str(path), requested_insert[2]["date"]))
+        return clean_orchestrator.CleanSqlRunResult(
+            statement_count=3,
+            affected_row_count=10,
+            revision=len(run_calls),
+            revision_changed=True,
+        )
+
+    monkeypatch.setattr(clean_orchestrator, "run_sql_file", fake_run_sql_file)
+
+    result = clean_orchestrator.run_migration_od_clean_dataset(connection, spec)
+
+    assert run_calls == [
+        (str(migration_sql), 202501),
+        (str(migration_sql), 202502),
+    ]
+    assert result.statement_count == 6
+    assert result.affected_row_count == 20
+    assert result.revision == 2
+    assert result.revision_changed is True
+    assert [
+        call[1]
+        for call in connection.calls
+        if call[0] == "exec_driver_sql"
+        and call[1] == "TRUNCATE clean_migration_od_requested_dates"
+    ] == [
+        "TRUNCATE clean_migration_od_requested_dates",
+        "TRUNCATE clean_migration_od_requested_dates",
+    ]
+
+
+def test_run_migration_od_clean_dataset_noops_when_no_target_periods(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_sql = write_sql(tmp_path / "migration_od.sql", "BEGIN; SELECT 1; COMMIT;")
+    spec = clean_orchestrator.CleanDatasetSpec(
+        "migration_od",
+        migration_sql,
+        ("clean_inflow", "clean_outflow"),
+    )
+    connection = RecordingConnection(revision=7)
+
+    monkeypatch.setattr(
+        clean_orchestrator,
+        "migration_od_clean_target_periods",
+        lambda connection, spec, rebuild_periods=(): (),
+    )
+
+    result = clean_orchestrator.run_migration_od_clean_dataset(connection, spec)
+
+    assert result.statement_count == 0
+    assert result.affected_row_count == 0
+    assert result.revision == 7
+    assert result.revision_changed is False
+    assert not any(
+        call[0] == "exec_driver_sql"
+        and call[1] == "TRUNCATE clean_migration_od_requested_dates"
+        for call in connection.calls
+    )

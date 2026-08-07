@@ -1,13 +1,13 @@
 # Project Instructions
 
-If present locally, read `docs/AI/HANDOFF_v0.3.0.md` and the latest
+If present locally, read `docs/AI/HANDOFF_v0.3.1.md` and the latest
 `docs/AI/TO_GPT_*.md` before making release or follow-up changes. Files under
 `docs/AI/` are ignored and are used only for AI-to-AI handoff notes.
 
 ## Current Status
 
-The project is at the end of the v0.3.0 Scheduled Update & Interactive TWFE
-Analysis work. v0.3.0 currently includes:
+The project is at the end of the v0.3.1 Migration OD & Living Population Data
+Integration release. v0.3.0 already includes:
 
 - canonical `rbi` CLI commands: `rbi update`, `rbi clean`, `rbi status`,
   and `rbi export`
@@ -18,7 +18,9 @@ Analysis work. v0.3.0 currently includes:
 - update-level PostgreSQL advisory lock
 - host user systemd timer templates that call
   `podman exec rbi-web rbi update --latest --export`
-- CSV and Stata DTA export for `raw.*` and `clean.*`
+- CSV export for `raw.*` and `clean.*`; the Stata DTA export code is retained
+  but no longer invoked by the public CLI because large OD tables can exceed
+  server memory
 - Redis/Celery async analysis jobs
 - `rbi-redis` and `rbi-analysis` Quadlet examples
 - traditional TWFE DiD and traditional TWFE Event Study via PyFixest
@@ -27,9 +29,27 @@ Analysis work. v0.3.0 currently includes:
 - saved indicators and saved analyses stored in PostgreSQL under
   `saved.saved_indicator` and `saved.saved_analysis`
 
-Remaining release-oriented work is mostly image/server smoke testing,
-timer/service smoke testing, final documentation review, and
-`docs/AI/TO_GPT_v0.3.0.md`.
+v0.3.1 adds data-only pipeline work:
+
+- `migration_od` source for 행정안전부 지역별 인구이동 현황
+- OD definition: `mvt` is origin/outflow, `mvin` is destination/inflow
+- `raw.migration_od` plus raw_json payload preservation
+- migration clean tables:
+  `clean_inflow`, `clean_inflow_sex`, `clean_inflow_age`,
+  `clean_inflow_sex_age`, `clean_outflow`, `clean_outflow_sex`,
+  `clean_outflow_age`, and `clean_outflow_sex_age`
+- `living_population` manual CSV import via
+  `rbi import living-population --file PATH`
+- `raw.living_population` long-format file import rows with SHA-256
+  idempotency
+- living clean tables:
+  `clean_living_population` and `clean_living_population_age`
+- `rbi status` reports the latest manual living-population import status
+- 신규 clean tables are exported, but OD tables are not exposed through the
+  generic dashboard or analysis options in v0.3.1
+
+v0.3.1 is still data-only: no OD frontend, no living-population-specific UI,
+and no new analysis estimator.
 
 ## Data Rules
 
@@ -61,8 +81,16 @@ timer/service smoke testing, final documentation review, and
 - Data updates are run by host user systemd through `podman exec rbi-web ...`.
 - Do not use Celery for data updates.
 - Do not bring back a scheduled updater container.
-- `rbi export` writes latest flat CSV/DTA files for `raw.*` and `clean.*` only;
-  it intentionally excludes `raw_json` and `metadata`.
+- `rbi export` writes latest flat CSV files for `raw.*` and `clean.*` only; it
+  intentionally excludes `raw_json` and `metadata`. Stata DTA export functions
+  remain in the codebase but are not called by the public CLI.
+- `migration_od` is included in the default `rbi update --latest` raw source and
+  clean dataset list. Existing successful source-periods must still be skipped.
+- `living_population` is a manual file import source and must not be included
+  in `rbi update --latest`.
+- Living population imports use SHA-256 idempotency and replace only periods
+  covered by the incoming cumulative file.
+- A missing or unpublished migration OD month must not block other sources.
 
 ## Analysis Rules
 
@@ -114,6 +142,11 @@ timer/service smoke testing, final documentation review, and
   `analysis_saved` or `indicator_saved` schemas.
 - Map assets are generated static web assets. Do not rely on ignored shapefiles
   at runtime.
+- OD clean tables include extra `from_*` or `to_*` dimensions. Keep them hidden
+  from generic `/api/data-status`, `/api/series`, and analysis options until a
+  dedicated OD API/UI exists.
+- Living population tables have ordinary regional time-series grain and may be
+  exposed like other compatible clean tables.
 
 ## Deployment Rules
 

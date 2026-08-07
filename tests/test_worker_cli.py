@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import io
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from rural_basic_income.config import get_settings
 from rural_basic_income.worker import cli, clean_orchestrator
 from rural_basic_income.worker import export as csv_export
 from rural_basic_income.worker import raw_orchestrator
+from rural_basic_income.worker.importers import living_population
+from rural_basic_income import cli as root_cli
+
+
+@pytest.fixture(autouse=True)
+def disable_telegram_notifications(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ENABLE_SUCCESS_TELEGRAM", "false")
+    monkeypatch.setenv("ENABLE_FAILURE_TELEGRAM", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 class ScalarResult:
@@ -64,17 +77,6 @@ def make_export_result(base_dir: str = "/tmp/rbi-export") -> csv_export.ExportRu
                 ),
             ),
         ),
-        dta=csv_export.ExportResult(
-            export_dir=Path(base_dir) / "dta",
-            tables=(
-                csv_export.ExportTableResult(
-                    schema_name="clean",
-                    table_name="clean_population",
-                    file_path=Path(base_dir) / "dta" / "clean_population.dta",
-                    row_count=1,
-                ),
-            ),
-        ),
     )
 
 
@@ -87,6 +89,41 @@ def test_split_option_values_accepts_commas_and_repeated_values() -> None:
         "electricity",
         "local_currency",
     )
+
+
+def test_main_normalizes_argv0_while_command_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_argv0: list[str] = []
+
+    def status_command(args) -> int:
+        observed_argv0.append(sys.argv[0])
+        return 0
+
+    monkeypatch.setattr(sys, "argv", ["/tmp/한글/rbi", "status"])
+    monkeypatch.setattr(cli, "configure_logging", lambda log_level: None)
+    monkeypatch.setattr(cli, "run_status_command", status_command)
+
+    assert cli.main(prog="rbi") == 0
+    assert observed_argv0 == ["rbi"]
+    assert sys.argv[0] == "/tmp/한글/rbi"
+
+
+def test_root_cli_normalizes_argv0_before_worker_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[str, tuple[str, ...], str]] = []
+
+    def worker_main(argv, *, prog: str) -> int:
+        observed.append((sys.argv[0], tuple(argv), prog))
+        return 0
+
+    monkeypatch.setattr(sys, "argv", ["/tmp/한글/rbi", "status"])
+    monkeypatch.setattr(cli, "main", worker_main)
+
+    assert root_cli.main() == 0
+    assert observed == [("rbi", ("status",), "rbi")]
+    assert sys.argv[0] == "/tmp/한글/rbi"
 
 
 def test_run_update_runs_raw_then_clean_with_selected_options() -> None:
@@ -206,21 +243,17 @@ def test_run_update_exports_when_raw_was_written() -> None:
     ]
     assert result.export_result is not None
     assert "csv: /tmp/rbi-export/csv" in output.getvalue()
-    assert "dta: /tmp/rbi-export/dta" in output.getvalue()
     assert "clean.clean_population: clean_population.csv rows=1" in output.getvalue()
-    assert "clean.clean_population: clean_population.dta rows=1" in output.getvalue()
 
 
-def test_run_update_skips_export_when_nothing_was_written_and_exports_exist(
+def test_run_update_skips_export_when_nothing_was_written_and_csv_exists(
     tmp_path: Path,
 ) -> None:
     output = io.StringIO()
     csv_dir = tmp_path / "csv"
     dta_dir = tmp_path / "dta"
     csv_dir.mkdir()
-    dta_dir.mkdir()
     (csv_dir / "clean_population.csv").write_text("date,population\n", encoding="utf-8")
-    (dta_dir / "clean_population.dta").write_bytes(b"dta")
 
     def raw_runner(*args, **kwargs):
         return (
@@ -296,6 +329,43 @@ def test_run_update_exports_when_export_files_are_missing(tmp_path: Path) -> Non
     assert f"csv: {csv_dir}" in output.getvalue()
 
 
+def test_run_status_prints_raw_and_manual_import_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = io.StringIO()
+    engine = LockingEngine(LockingConnection(lock_result=True))
+    living_status = living_population.LivingPopulationImportStatus(
+        status="clean_committed",
+        original_filename="living.csv",
+        min_period="202401",
+        max_period="202603",
+        period_count=27,
+        raw_row_count=92448,
+    )
+
+    monkeypatch.setattr(
+        raw_orchestrator,
+        "source_last_success_period",
+        lambda source_name, *, engine: "202606",
+    )
+    monkeypatch.setattr(
+        living_population,
+        "fetch_latest_import_status",
+        lambda connection: living_status,
+    )
+
+    result = cli.run_status(
+        sources=("population",),
+        engine=engine,
+        output=output,
+    )
+
+    assert result.source_statuses == (("population", "202606"),)
+    assert result.living_population_status == living_status
+    assert "population: last_success=202606" in output.getvalue()
+    assert "living_population: status=clean_committed" in output.getvalue()
+
+
 def test_run_update_exports_when_clean_changed(tmp_path: Path) -> None:
     calls: list[str] = []
     output = io.StringIO()
@@ -348,6 +418,55 @@ def test_run_update_exports_when_clean_changed(tmp_path: Path) -> None:
 
     assert calls == ["export"]
     assert result.export_result is not None
+
+
+def test_run_import_living_population_runs_importer_and_export() -> None:
+    calls: list[tuple[str, Any]] = []
+    output = io.StringIO()
+    engine = object()
+
+    def importer(file_path, **kwargs):
+        calls.append(("importer", file_path, kwargs["engine"], kwargs["force_raw"]))
+        return living_population.LivingPopulationImportResult(
+            source_name="living_population",
+            file_path=Path(file_path),
+            sha256="abcdef1234567890",
+            periods=("202401", "202402"),
+            raw_row_count=16,
+            raw_status="raw_committed",
+            clean_results=(
+                clean_orchestrator.CleanDatasetResult(
+                    dataset_name="living_population",
+                    sql_file=Path("clean_living_population.sql"),
+                    statement_count=8,
+                    affected_row_count=4,
+                    revision=1,
+                    revision_changed=True,
+                ),
+            ),
+        )
+
+    def export_runner(**kwargs):
+        calls.append(("export", kwargs["engine"]))
+        return make_export_result()
+
+    result = cli.run_import_living_population(
+        file_path="/imports/living.csv",
+        force_raw=True,
+        engine=engine,
+        importer=importer,
+        export_requested=True,
+        export_runner=export_runner,
+        output=output,
+        lock_update=False,
+    )
+
+    assert result.export_result is not None
+    assert calls == [
+        ("importer", "/imports/living.csv", engine, True),
+        ("export", engine),
+    ]
+    assert "living_population: raw_committed periods=202401-202402" in output.getvalue()
 
 
 def test_run_update_latest_uses_configured_default_start_period(
@@ -604,6 +723,65 @@ def test_update_command_requires_periods_without_latest() -> None:
     assert exc_info.value.code == 2
 
 
+def test_main_sends_success_notification_for_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    monkeypatch.setattr(cli, "configure_logging", lambda log_level: None)
+    monkeypatch.setattr(cli, "run_update_command", lambda args: 0)
+    monkeypatch.setattr(
+        cli.worker_notify,
+        "notify_worker_command_success",
+        lambda **kwargs: calls.append(("success", kwargs)),
+    )
+    monkeypatch.setattr(
+        cli.worker_notify,
+        "notify_worker_command_failure",
+        lambda **kwargs: calls.append(("failure", kwargs)),
+    )
+
+    assert cli.main(("update", "--latest")) == 0
+
+    assert len(calls) == 1
+    assert calls[0][0] == "success"
+    assert calls[0][1]["command"] == "update"
+    assert calls[0][1]["argv"] == ("update", "--latest")
+    assert calls[0][1]["duration_seconds"] >= 0
+
+
+def test_main_sends_failure_notification_for_unexpected_update_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+    error = RuntimeError("boom")
+
+    def fail_update_command(args):
+        raise error
+
+    monkeypatch.setattr(cli, "configure_logging", lambda log_level: None)
+    monkeypatch.setattr(cli, "run_update_command", fail_update_command)
+    monkeypatch.setattr(
+        cli.worker_notify,
+        "notify_worker_command_success",
+        lambda **kwargs: calls.append(("success", kwargs)),
+    )
+    monkeypatch.setattr(
+        cli.worker_notify,
+        "notify_worker_command_failure",
+        lambda **kwargs: calls.append(("failure", kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        cli.main(("update", "--latest"))
+
+    assert len(calls) == 1
+    assert calls[0][0] == "failure"
+    assert calls[0][1]["command"] == "update"
+    assert calls[0][1]["argv"] == ("update", "--latest")
+    assert calls[0][1]["error"] is error
+
+
 def test_clean_command_parses_rebuild_periods(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -675,6 +853,57 @@ def test_export_command_runs_current_db_export(
     ]
 
 
+def test_import_living_population_command_parses_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fake_run_import_living_population(**kwargs):
+        calls.append(kwargs)
+        return cli.WorkerImportResult(
+            import_result=living_population.LivingPopulationImportResult(
+                source_name="living_population",
+                file_path=Path(kwargs["file_path"]),
+                sha256="abcdef123456",
+                periods=("202401",),
+                raw_row_count=8,
+                raw_status="raw_committed",
+                clean_results=(),
+            )
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "run_import_living_population",
+        fake_run_import_living_population,
+    )
+    exit_code = cli.main(
+        (
+            "import",
+            "living-population",
+            "--file",
+            "/imports/living.csv",
+            "--force-raw",
+            "--export",
+            "--export-csv-dir",
+            "/tmp/rbi-export",
+            "--export-dta-dir",
+            "/tmp/rbi-export-dta",
+        )
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "file_path": "/imports/living.csv",
+            "force_raw": True,
+            "export_requested": True,
+            "export_csv_dir": "/tmp/rbi-export",
+            "export_dta_dir": "/tmp/rbi-export-dta",
+        }
+    ]
+
+
 def test_status_command_parses_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -682,7 +911,10 @@ def test_status_command_parses_sources(
 
     def fake_run_status(**kwargs):
         calls.append(kwargs)
-        return cli.WorkerStatusResult(source_statuses=())
+        return cli.WorkerStatusResult(
+            source_statuses=(),
+            living_population_status=living_population.LivingPopulationImportStatus(),
+        )
 
     monkeypatch.setattr(cli, "run_status", fake_run_status)
     exit_code = cli.main(("status", "--sources", "population,mover"))

@@ -17,6 +17,3 @@ HealthRetries=5
 [Service]
 Restart=always
 TimeoutStartSec=120
-
-[Install]
-WantedBy=default.target

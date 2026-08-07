@@ -30,10 +30,21 @@ REGION_MERGE_KEY_PATH = (
 )
 BASE_COLUMNS = ("date", "region_sido", "region_sigungu")
 FILTER_COLUMNS = ("sex", "age", "contract_type")
+OD_CLEAN_TABLES = {
+    "clean_inflow",
+    "clean_inflow_sex",
+    "clean_inflow_age",
+    "clean_inflow_sex_age",
+    "clean_outflow",
+    "clean_outflow_sex",
+    "clean_outflow_age",
+    "clean_outflow_sex_age",
+}
 NON_VARIABLE_COLUMNS = {
     "date",
     "region_sido",
     "region_sigungu",
+    "region_type",
     "sex",
     "age",
     "contract_type",
@@ -94,7 +105,8 @@ def qualified_table_name(table_name: str) -> str:
 
 def fetch_clean_table_names(connection: Connection) -> tuple[str, ...]:
     return tuple(
-        connection.execute(
+        table_name
+        for table_name in connection.execute(
             text(
                 """
                 SELECT table_name
@@ -106,6 +118,7 @@ def fetch_clean_table_names(connection: Connection) -> tuple[str, ...]:
             ),
             {"schema": CLEAN_SCHEMA},
         ).scalars()
+        if table_name not in OD_CLEAN_TABLES
     )
 
 

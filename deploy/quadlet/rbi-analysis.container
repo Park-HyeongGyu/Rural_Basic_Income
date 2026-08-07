@@ -9,7 +9,7 @@ After=rbi-redis.service
 
 [Container]
 ContainerName=rbi-analysis
-Image=localhost/rural-basic-income:0.3.0
+Image=localhost/rural-basic-income:0.3.1
 Pod=rbi-pod.pod
 EnvironmentFile=/home/yum_ki/Dropbox/농어촌기본소득/Rural_Basic_Income/.env
 Environment=APP_ENV=production
@@ -19,6 +19,3 @@ Exec=celery -A rural_basic_income.analysis.celery_app:app worker --loglevel=INFO
 [Service]
 Restart=always
 TimeoutStartSec=60
-
-[Install]
-WantedBy=default.target
