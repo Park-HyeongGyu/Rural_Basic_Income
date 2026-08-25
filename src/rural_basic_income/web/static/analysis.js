@@ -1245,6 +1245,9 @@
   }
 
   function hashForView(viewTarget) {
+    if (viewTarget === "info-view") {
+      return "#info";
+    }
     if (viewTarget === "analysis-view") {
       return "#analysis";
     }
@@ -1368,6 +1371,8 @@
       initMapSelector();
       if (window.location.hash === "#analysis") {
         activateView("analysis-view");
+      } else if (window.location.hash === "#info") {
+        activateView("info-view");
       } else if (window.location.hash === "#saved-indicator") {
         activateView("saved-indicator-view");
       } else if (window.location.hash === "#saved-analysis") {

@@ -10,6 +10,7 @@
     <script src="/static/app.js?v={{ static_versions['app.js'] }}" defer></script>
     <script src="/static/analysis.js?v={{ static_versions['analysis.js'] }}" defer></script>
     <script src="/static/analysis_map.js?v={{ static_versions['analysis_map.js'] }}" defer></script>
+    <script src="/static/info.js?v={{ static_versions['info.js'] }}" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -21,11 +22,59 @@
     </header>
 
     <nav class="view-tabs" aria-label="화면 선택">
+      <button class="tab-button" type="button" data-view-target="info-view">정보</button>
       <button class="tab-button is-active" type="button" data-view-target="dashboard-view">지표</button>
       <button class="tab-button" type="button" data-view-target="analysis-view">분석</button>
       <button class="tab-button" type="button" data-view-target="saved-indicator-view">저장된 지표</button>
       <button class="tab-button" type="button" data-view-target="saved-analysis-view">저장된 분석</button>
     </nav>
+
+    <main class="info-layout app-view is-hidden" id="info-view">
+      <section class="info-list-section info-read-panel" aria-label="정보 글 목록">
+        <div class="section-heading">
+          <h2>정보</h2>
+          <div class="info-action-row">
+            <button class="text-button" id="info-new-button" type="button">새 글 작성</button>
+            <button class="text-button" id="info-refresh" type="button">새로고침</button>
+          </div>
+        </div>
+        <div class="status-line" id="info-status">정보 글을 불러오는 중</div>
+        <div class="info-post-list" id="info-post-list"></div>
+      </section>
+
+      <section class="info-detail-section info-read-panel" aria-label="정보 글 본문">
+        <div class="section-heading">
+          <div>
+            <h2 id="info-detail-title">글 없음</h2>
+            <span id="info-detail-meta"></span>
+          </div>
+        </div>
+        <article class="markdown-body" id="info-detail-body">
+          <p>아직 선택된 글이 없습니다.</p>
+        </article>
+      </section>
+
+      <section class="info-form-section is-hidden" aria-label="정보 글 작성">
+        <div class="section-heading">
+          <h2>새 글</h2>
+          <button class="text-button" id="info-cancel-button" type="button">돌아가기</button>
+        </div>
+        <form class="info-form" id="info-form">
+          <label class="field">
+            <span>제목</span>
+            <input id="info-title-input" type="text" maxlength="200" required>
+          </label>
+          <label class="field">
+            <span>본문</span>
+            <textarea id="info-body-input" rows="14" required></textarea>
+          </label>
+          <div class="info-form-actions">
+            <span>Markdown</span>
+            <button id="info-create-button" type="submit">저장</button>
+          </div>
+        </form>
+      </section>
+    </main>
 
     <main class="layout app-view" id="dashboard-view">
       <section class="dashboard-selector" aria-label="조회 조건과 지도">

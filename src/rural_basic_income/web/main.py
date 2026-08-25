@@ -14,6 +14,7 @@ from rural_basic_income.db.connection import (
 )
 from rural_basic_income.web.api.analysis import router as analysis_router
 from rural_basic_income.web.api.data import router as data_router
+from rural_basic_income.web.api.info import router as info_router
 
 WEB_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEB_DIR / "static"
@@ -25,6 +26,7 @@ STATIC_ASSETS = (
     "app.js",
     "analysis.js",
     "analysis_map.js",
+    "info.js",
     "maps/sigungu_2023_4q.json",
     "maps/treatment_regions.json",
 )
@@ -97,6 +99,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(data_router)
     app.include_router(analysis_router)
+    app.include_router(info_router)
 
     return app
 
