@@ -282,10 +282,23 @@
     return state.options.regions.filter((region) => region.region_sido === sido);
   }
 
+  function regionSelectLabel(region) {
+    return window.RBII18n?.regionLabel(region)
+      || region.region_sigungu
+      || region.region_sido
+      || "";
+  }
+
   function populateRegionPicker(sidoSelect, sigunguSelect, preferredSido, preferredSigungu) {
     const sidos = [...new Set(state.options.regions.map((region) => region.region_sido))]
       .sort();
-    fillSelect(sidoSelect, sidos, (sido) => sido, (sido) => sido, preferredSido || "전북");
+    fillSelect(
+      sidoSelect,
+      sidos,
+      (sido) => sido,
+      (sido) => regionSelectLabel({ region_sido: sido }),
+      preferredSido || "전북",
+    );
     populateSigunguPicker(sidoSelect, sigunguSelect, preferredSigungu);
   }
 
@@ -295,8 +308,23 @@
       sigunguSelect,
       regions,
       (region) => region.region_sigungu,
-      (region) => region.region_sigungu,
+      (region) => regionSelectLabel(region),
       preferredSigungu,
+    );
+  }
+
+  function refreshRegionPickerLabels() {
+    populateRegionPicker(
+      els.treatmentSido,
+      els.treatmentSigungu,
+      els.treatmentSido.value,
+      els.treatmentSigungu.value,
+    );
+    populateRegionPicker(
+      els.controlSido,
+      els.controlSigungu,
+      els.controlSido.value,
+      els.controlSigungu.value,
     );
   }
 
@@ -1352,6 +1380,7 @@
     els.save.addEventListener("click", () => saveCurrentAnalysis());
     els.updateSave.addEventListener("click", () => saveCurrentAnalysis({ update: true }));
     els.savedRefresh.addEventListener("click", () => loadSavedAnalyses({ force: true }));
+    window.addEventListener("rbi:languagechange", refreshRegionPickerLabels);
   }
 
   async function init() {

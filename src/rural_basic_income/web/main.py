@@ -23,6 +23,7 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 STATIC_ASSETS = (
     "styles.css",
     "line_graph.js",
+    "i18n.js",
     "app.js",
     "analysis.js",
     "analysis_map.js",

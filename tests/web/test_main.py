@@ -18,3 +18,5 @@ def test_index_uses_root_relative_static_asset_urls() -> None:
     assert 'data-map-src="/static/maps/sigungu_2023_4q.json?v=' in template
     assert "{{ url_for('static'" not in template
     assert 'href="/static/styles.css?v=' in template
+    assert 'src="/static/i18n.js?v=' in template
+    assert 'id="language-toggle"' in template

@@ -91,6 +91,39 @@ h2 {
   white-space: nowrap;
 }
 
+.topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.language-toggle {
+  gap: 4px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--muted);
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.language-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.language-toggle[data-language="en"] [data-lang-en],
+.language-toggle[data-language="ko"] [data-lang-ko] {
+  color: var(--accent);
+}
+
+.language-separator {
+  color: var(--line);
+}
+
 .view-tabs {
   display: flex;
   gap: 8px;

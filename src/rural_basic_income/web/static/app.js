@@ -322,10 +322,23 @@ function tablePeriods(table) {
   return periods;
 }
 
-function populateRegions() {
+function regionSelectLabel(region) {
+  return window.RBII18n?.regionLabel(region)
+    || region.region_sigungu
+    || region.region_sido
+    || "";
+}
+
+function populateRegions(preferredSido = "전북", preferredSigungu = "임실군") {
   const sidos = [...new Set(state.regions.map((region) => region.region_sido))].sort();
-  fillSelect(els.sido, sidos, (sido) => sido, (sido) => sido, "전북");
-  populateSigungu("임실군");
+  fillSelect(
+    els.sido,
+    sidos,
+    (sido) => sido,
+    (sido) => regionSelectLabel({ region_sido: sido }),
+    preferredSido,
+  );
+  populateSigungu(preferredSigungu);
 }
 
 function populateSigungu(preferredSigungu) {
@@ -334,9 +347,13 @@ function populateSigungu(preferredSigungu) {
     els.sigungu,
     regions,
     (region) => region.region_sigungu,
-    (region) => region.region_sigungu,
+    (region) => regionSelectLabel(region),
     preferredSigungu,
   );
+}
+
+function refreshRegionSelectLabels() {
+  populateRegions(els.sido.value, els.sigungu.value);
 }
 
 function renderSelectedDashboardRegions() {
@@ -1118,6 +1135,7 @@ function bindEvents() {
       window.requestAnimationFrame(() => Plotly.Plots.resize(els.chart));
     }
   });
+  window.addEventListener("rbi:languagechange", refreshRegionSelectLabels);
   els.selectAllVariables.addEventListener("click", () => {
     const inputs = els.variables.querySelectorAll("input[type='checkbox']");
     const shouldSelectAll = [...inputs].some((input) => !input.checked);

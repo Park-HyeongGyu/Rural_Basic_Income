@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/static/styles.css?v={{ static_versions['styles.css'] }}">
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
     <script src="/static/line_graph.js?v={{ static_versions['line_graph.js'] }}" defer></script>
+    <script src="/static/i18n.js?v={{ static_versions['i18n.js'] }}" defer></script>
     <script src="/static/app.js?v={{ static_versions['app.js'] }}" defer></script>
     <script src="/static/analysis.js?v={{ static_versions['analysis.js'] }}" defer></script>
     <script src="/static/analysis_map.js?v={{ static_versions['analysis_map.js'] }}" defer></script>
@@ -18,7 +19,21 @@
         <p class="eyebrow">Rural Basic Income</p>
         <h1>지역 지표 시계열</h1>
       </div>
-      <div class="version">v{{ app_version }}</div>
+      <div class="topbar-actions">
+        <button
+          class="language-toggle"
+          id="language-toggle"
+          type="button"
+          aria-label="Switch language"
+          title="Switch language"
+          data-i18n-skip
+        >
+          <span data-lang-en>ENG</span>
+          <span class="language-separator">/</span>
+          <span data-lang-ko>한</span>
+        </button>
+        <div class="version">v{{ app_version }}</div>
+      </div>
     </header>
 
     <nav class="view-tabs" aria-label="화면 선택">
