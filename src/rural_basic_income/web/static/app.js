@@ -1141,6 +1141,7 @@ function initDashboardMap() {
   state.dashboardMap = window.RBIRegionMap.create({
     root: panel,
     mapUrl: panel.dataset.mapSrc,
+    treatmentUrl: panel.dataset.treatmentSrc,
     regions: state.regions,
     labels: true,
     selections: {

@@ -1285,6 +1285,7 @@
     state.mapSelector = window.RBIRegionMap.create({
       root: panel,
       mapUrl: panel.dataset.mapSrc,
+      treatmentUrl: panel.dataset.treatmentSrc,
       regions: state.options.regions,
       labels: true,
       selections: {

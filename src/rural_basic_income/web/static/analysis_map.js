@@ -5,6 +5,10 @@
   const MAX_ZOOM = 6;
   const LABEL_ZOOM_DAMPING = 0.72;
   const SVG_VIEWPORTS = new WeakMap();
+  const TREATMENT_GROUP_CLASSES = {
+    phase1: "policy-treatment-phase1",
+    phase2: "policy-treatment-phase2",
+  };
 
   function regionId(region) {
     return `${region.region_sido}::${region.region_sigungu}`;
@@ -28,6 +32,72 @@
       }
       return response.json();
     });
+  }
+
+  async function loadTreatmentOverlay(url, availableIds) {
+    if (!url) {
+      return [];
+    }
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`처리지역 파일을 불러오지 못했습니다: ${response.status}`);
+      }
+      const payload = await response.json();
+      return normalizeTreatmentGroups(payload, availableIds);
+    } catch (error) {
+      console.warn(error);
+      return [];
+    }
+  }
+
+  function normalizeTreatmentGroups(payload, availableIds) {
+    return (payload.groups || [])
+      .map((group) => ({
+        key: String(group.key || "").trim(),
+        label: String(group.label || group.key || "").trim(),
+        description: String(group.description || "").trim(),
+        regions: (group.regions || [])
+          .map((region) => ({
+            region_sido: region.region_sido,
+            region_sigungu: region.region_sigungu,
+            treatment_start_period: region.treatment_start_period || "",
+            first_payment_date: region.first_payment_date || "",
+            note: region.note || "",
+          }))
+          .filter((region) => availableIds.has(regionId(region))),
+      }))
+      .filter((group) => group.key && group.label && group.regions.length);
+  }
+
+  function treatmentGroupClass(groupKey) {
+    if (TREATMENT_GROUP_CLASSES[groupKey]) {
+      return TREATMENT_GROUP_CLASSES[groupKey];
+    }
+    return `policy-treatment-${groupKey.replace(/[^a-z0-9_-]/gi, "-")}`;
+  }
+
+  function buildTreatmentIndex(groups) {
+    const index = new Map();
+    for (const group of groups) {
+      for (const region of group.regions) {
+        index.set(regionId(region), {
+          ...region,
+          groupKey: group.key,
+          groupLabel: group.label,
+          groupDescription: group.description,
+        });
+      }
+    }
+    return index;
+  }
+
+  function formatPeriod(period) {
+    const value = String(period || "");
+    if (/^\d{6}$/.test(value)) {
+      return `${value.slice(0, 4)}.${value.slice(4)}`;
+    }
+    return value;
   }
 
   function computeBounds(features) {
@@ -179,6 +249,8 @@
       labels: config.labels !== false,
       projection: config.projection || {},
       zoomProjection: config.zoomProjection || {},
+      treatmentGroups: [],
+      treatmentByRegionId: new Map(),
       els: {},
     };
 
@@ -202,6 +274,33 @@
 
     function isZoomSido(region) {
       return ZOOM_SIDOS.has(region.region_sido);
+    }
+
+    function treatmentOverlayText(region) {
+      const item = instance.treatmentByRegionId.get(regionId(region));
+      if (!item) {
+        return "";
+      }
+      const parts = [item.groupLabel];
+      if (item.treatment_start_period) {
+        parts.push(`시작 ${formatPeriod(item.treatment_start_period)}`);
+      }
+      if (item.first_payment_date) {
+        parts.push(`첫 지급 ${item.first_payment_date}`);
+      }
+      if (item.note) {
+        parts.push(item.note);
+      }
+      return parts.join(" · ");
+    }
+
+    function regionTitleText(region, options) {
+      const baseText =
+        options.zoom || !isZoomSido(region)
+          ? regionLabel(region)
+          : `${region.region_sido} 확대`;
+      const treatmentText = treatmentOverlayText(region);
+      return treatmentText ? `${baseText} · ${treatmentText}` : baseText;
     }
 
     function renderMap(svg, features, options = {}) {
@@ -234,16 +333,11 @@
         path.setAttribute("tabindex", "0");
         path.setAttribute(
           "aria-label",
-          options.zoom || !isZoomSido(region)
-            ? regionLabel(region)
-            : `${region.region_sido} 확대`,
+          regionTitleText(region, options),
         );
 
         const title = document.createElementNS(SVG_NS, "title");
-        title.textContent =
-          options.zoom || !isZoomSido(region)
-            ? regionLabel(region)
-            : `${region.region_sido} 확대`;
+        title.textContent = regionTitleText(region, options);
         path.append(title);
 
         path.addEventListener("click", (event) => {
@@ -261,11 +355,7 @@
           }
         });
         path.addEventListener("mouseenter", () => {
-          setHoverText(
-            options.zoom || !isZoomSido(region)
-              ? regionLabel(region)
-              : `${region.region_sido} 확대`,
-          );
+          setHoverText(regionTitleText(region, options));
         });
         path.addEventListener("mouseleave", () => setHoverText(""));
 
@@ -606,12 +696,24 @@
       if (!root) {
         return;
       }
+      const policyClassNames = new Set(
+        instance.treatmentGroups.map((group) => treatmentGroupClass(group.key)),
+      );
       root.querySelectorAll(".map-region").forEach((path) => {
         const id = path.dataset.mapRegionId;
         let selected = false;
         const knownSelectionClasses = new Set(
           Object.keys(instance.selections).map(selectionClass),
         );
+        path.classList.remove("is-policy-treatment");
+        for (const className of policyClassNames) {
+          path.classList.remove(`is-${className}`);
+        }
+        const treatmentOverlay = instance.treatmentByRegionId.get(id);
+        if (treatmentOverlay) {
+          path.classList.add("is-policy-treatment");
+          path.classList.add(`is-${treatmentGroupClass(treatmentOverlay.groupKey)}`);
+        }
         for (const className of knownSelectionClasses) {
           path.classList.remove(`is-${className}`);
         }
@@ -624,6 +726,31 @@
       });
     }
 
+    function renderTreatmentLegend() {
+      if (!instance.els.legend) {
+        return;
+      }
+      instance.els.legend.replaceChildren();
+      if (!instance.treatmentGroups.length) {
+        instance.els.legend.classList.add("is-hidden");
+        return;
+      }
+      instance.els.legend.classList.remove("is-hidden");
+      for (const group of instance.treatmentGroups) {
+        const item = document.createElement("span");
+        item.className = "map-treatment-legend-item";
+        const swatch = document.createElement("span");
+        swatch.className = `map-treatment-swatch is-${treatmentGroupClass(group.key)}`;
+        const label = document.createElement("span");
+        label.textContent = `${group.label} ${group.regions.length}곳`;
+        item.append(swatch, label);
+        if (group.description) {
+          item.title = group.description;
+        }
+        instance.els.legend.append(item);
+      }
+    }
+
     async function init() {
       instance.els = {
         mapSvg: instance.root.querySelector("[data-map-svg]"),
@@ -634,6 +761,7 @@
         stage: instance.root.querySelector("[data-map-stage]"),
         loading: instance.root.querySelector("[data-map-loading]"),
         hover: instance.root.querySelector("[data-map-hover]"),
+        legend: instance.root.querySelector("[data-map-treatment-legend]"),
       };
 
       instance.root.querySelectorAll("[data-map-mode]").forEach((button) => {
@@ -646,10 +774,16 @@
 
       try {
         const availableIds = new Set((config.regions || []).map(regionId));
-        const geojson = await loadMap(config.mapUrl);
+        const [geojson, treatmentGroups] = await Promise.all([
+          loadMap(config.mapUrl),
+          loadTreatmentOverlay(config.treatmentUrl, availableIds),
+        ]);
+        instance.treatmentGroups = treatmentGroups;
+        instance.treatmentByRegionId = buildTreatmentIndex(treatmentGroups);
         instance.features = geojson.features.filter((feature) =>
           availableIds.has(regionId(featureRegion(feature))),
         );
+        renderTreatmentLegend();
         renderMap(instance.els.mapSvg, instance.features, {
           projection: {
             width: 1000,

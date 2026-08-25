@@ -26,6 +26,7 @@ STATIC_ASSETS = (
     "analysis.js",
     "analysis_map.js",
     "maps/sigungu_2023_4q.json",
+    "maps/treatment_regions.json",
 )
 
 

@@ -1,0 +1,116 @@
+{
+  "groups": [
+    {
+      "key": "phase1",
+      "label": "1차 시행지역",
+      "description": "2026년 2월 첫 지급 지역. 곡성군은 2026년 3월 말에 2월분 포함 지급.",
+      "regions": [
+        {
+          "region_sido": "경기",
+          "region_sigungu": "연천군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-02-27"
+        },
+        {
+          "region_sido": "강원",
+          "region_sigungu": "정선군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-02-27"
+        },
+        {
+          "region_sido": "충북",
+          "region_sigungu": "옥천군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-02-27"
+        },
+        {
+          "region_sido": "충남",
+          "region_sigungu": "청양군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-02-27"
+        },
+        {
+          "region_sido": "전북",
+          "region_sigungu": "순창군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-02-26"
+        },
+        {
+          "region_sido": "전북",
+          "region_sigungu": "장수군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-02-26"
+        },
+        {
+          "region_sido": "전남",
+          "region_sigungu": "곡성군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-03-31",
+          "note": "3월 말 2월분 포함 2개월분 지급"
+        },
+        {
+          "region_sido": "전남",
+          "region_sigungu": "신안군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-02-27",
+          "note": "월 20만원"
+        },
+        {
+          "region_sido": "경북",
+          "region_sigungu": "영양군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-02-26",
+          "note": "월 20만원"
+        },
+        {
+          "region_sido": "경남",
+          "region_sigungu": "남해군",
+          "treatment_start_period": "202602",
+          "first_payment_date": "2026-02-27"
+        }
+      ]
+    },
+    {
+      "key": "phase2",
+      "label": "2차 시행지역",
+      "description": "2026년 6월 11일 추가 선정, 2026년 8월부터 지급.",
+      "regions": [
+        {
+          "region_sido": "강원",
+          "region_sigungu": "화천군",
+          "treatment_start_period": "202608"
+        },
+        {
+          "region_sido": "충북",
+          "region_sigungu": "보은군",
+          "treatment_start_period": "202608"
+        },
+        {
+          "region_sido": "전북",
+          "region_sigungu": "진안군",
+          "treatment_start_period": "202608"
+        },
+        {
+          "region_sido": "전북",
+          "region_sigungu": "무주군",
+          "treatment_start_period": "202608"
+        },
+        {
+          "region_sido": "전남",
+          "region_sigungu": "구례군",
+          "treatment_start_period": "202608"
+        },
+        {
+          "region_sido": "전남",
+          "region_sigungu": "보성군",
+          "treatment_start_period": "202608"
+        },
+        {
+          "region_sido": "경북",
+          "region_sigungu": "청송군",
+          "treatment_start_period": "202608"
+        }
+      ]
+    }
+  ]
+}

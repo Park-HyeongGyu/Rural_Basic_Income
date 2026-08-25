@@ -5,17 +5,21 @@
   --muted: #65717f;
   --line: #d8dee7;
   --panel: #ffffff;
-  --accent: #2364aa;
-  --accent-dark: #174a7d;
-  --accent-soft: #e8f1fb;
-  --control: #2f855a;
-  --control-soft: #dff1e6;
+  --accent: #1d4ed8;
+  --accent-dark: #1e3a8a;
+  --accent-soft: #bfdbfe;
+  --control: #166534;
+  --control-soft: #bbf7d0;
   --danger: #b42318;
   --empty: #f0f3f7;
   --map-height: clamp(860px, 84vh, 1080px);
   --zoom-map-height: clamp(560px, 62vh, 760px);
-  --treatment: #c24135;
-  --treatment-soft: #f8d8d5;
+  --treatment: #b91c1c;
+  --treatment-soft: #fecaca;
+  --policy-treatment-phase1: #a78bfa;
+  --policy-treatment-phase1-soft: #f8f3ff;
+  --policy-treatment-phase2: #f9a8d4;
+  --policy-treatment-phase2-soft: #fff1f8;
 }
 
 * {
@@ -541,6 +545,44 @@ button:focus-visible {
   color: var(--text);
 }
 
+.map-treatment-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.map-treatment-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--muted);
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.map-treatment-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+}
+
+.map-treatment-swatch.is-policy-treatment-phase1 {
+  background: var(--policy-treatment-phase1-soft);
+  color: var(--policy-treatment-phase1);
+}
+
+.map-treatment-swatch.is-policy-treatment-phase2 {
+  background: var(--policy-treatment-phase2-soft);
+  color: var(--policy-treatment-phase2);
+}
+
 .analysis-map-stage {
   position: relative;
   display: grid;
@@ -628,6 +670,18 @@ button:focus-visible {
 
 .map-region.is-zoom-entry:not(.is-selected) {
   fill: #f1f5f9;
+}
+
+.map-region.is-policy-treatment-phase1:not(.is-selected) {
+  fill: var(--policy-treatment-phase1-soft);
+  stroke: var(--policy-treatment-phase1);
+  stroke-width: 1.2;
+}
+
+.map-region.is-policy-treatment-phase2:not(.is-selected) {
+  fill: var(--policy-treatment-phase2-soft);
+  stroke: var(--policy-treatment-phase2);
+  stroke-width: 1.2;
 }
 
 .map-region:hover,

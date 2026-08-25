@@ -81,6 +81,7 @@
           class="dashboard-map-panel"
           id="dashboard-map-panel"
           data-map-src="/static/maps/sigungu_2023_4q.json?v={{ static_versions['maps/sigungu_2023_4q.json'] }}"
+          data-treatment-src="/static/maps/treatment_regions.json?v={{ static_versions['maps/treatment_regions.json'] }}"
           aria-label="지표 지도 선택"
         >
           <div class="panel-heading map-heading">
@@ -90,6 +91,7 @@
               <button class="map-mode-button" type="button" data-map-mode="clear" title="선택 해제">해제</button>
             </div>
           </div>
+          <div class="map-treatment-legend" data-map-treatment-legend></div>
           <div class="analysis-map-stage" data-map-stage>
             <div class="map-frame">
               <svg class="region-map-svg" data-map-svg role="img" aria-label="전국 시군구 지도"></svg>
@@ -238,6 +240,7 @@
             class="analysis-map-panel"
             id="analysis-map-panel"
             data-map-src="/static/maps/sigungu_2023_4q.json?v={{ static_versions['maps/sigungu_2023_4q.json'] }}"
+            data-treatment-src="/static/maps/treatment_regions.json?v={{ static_versions['maps/treatment_regions.json'] }}"
             aria-label="분석 지도 선택"
           >
             <div class="panel-heading map-heading">
@@ -248,6 +251,7 @@
                 <button class="map-mode-button" type="button" data-map-mode="clear" title="선택 해제">해제</button>
               </div>
             </div>
+            <div class="map-treatment-legend" data-map-treatment-legend></div>
             <div class="analysis-map-stage" data-map-stage>
               <div class="map-frame">
                 <svg class="region-map-svg" data-map-svg role="img" aria-label="전국 시군구 지도"></svg>
