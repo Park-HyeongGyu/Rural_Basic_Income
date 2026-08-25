@@ -184,7 +184,8 @@ def clean_results_have_changes(
     results: Sequence[clean_orchestrator.CleanDatasetResult],
 ) -> bool:
     return any(
-        result.affected_row_count > 0 or result.revision_changed
+        (result.affected_row_count > 0 or result.revision_changed)
+        and result.dataset_name not in csv_export.EXCLUDED_EXPORT_CLEAN_DATASETS
         for result in results
     )
 

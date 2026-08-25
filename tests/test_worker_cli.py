@@ -420,6 +420,60 @@ def test_run_update_exports_when_clean_changed(tmp_path: Path) -> None:
     assert result.export_result is not None
 
 
+def test_run_update_skips_export_when_only_web_clean_changed(
+    tmp_path: Path,
+) -> None:
+    output = io.StringIO()
+    csv_dir = tmp_path / "csv"
+    dta_dir = tmp_path / "dta"
+    csv_dir.mkdir()
+    dta_dir.mkdir()
+    (csv_dir / "clean_population.csv").write_text("date,population\n", encoding="utf-8")
+    (dta_dir / "clean_population.dta").write_bytes(b"dta")
+
+    def raw_runner(*args, **kwargs):
+        return (
+            raw_orchestrator.RawRefreshResult(
+                source_name="migration_od",
+                period="202601",
+                status="skipped_existing",
+                row_count=10,
+            ),
+        )
+
+    def clean_runner(*args, **kwargs):
+        return (
+            clean_orchestrator.CleanDatasetResult(
+                dataset_name="migration_web",
+                sql_file=Path("clean_migration_web.sql"),
+                statement_count=22,
+                affected_row_count=14144,
+                revision=1,
+                revision_changed=True,
+            ),
+        )
+
+    def fail_export_runner(**kwargs):
+        raise AssertionError("web-only clean changes should not trigger export")
+
+    result = cli.run_update(
+        start_period="202601",
+        end_period="202601",
+        engine=object(),
+        raw_runner=raw_runner,
+        clean_runner=clean_runner,
+        export_requested=True,
+        export_csv_dir=str(csv_dir),
+        export_dta_dir=str(dta_dir),
+        export_runner=fail_export_runner,
+        output=output,
+        lock_update=False,
+    )
+
+    assert result.export_result is None
+    assert "skipped: no data changes and export files exist" in output.getvalue()
+
+
 def test_run_import_living_population_runs_importer_and_export() -> None:
     calls: list[tuple[str, Any]] = []
     output = io.StringIO()

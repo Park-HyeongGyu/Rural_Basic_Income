@@ -20,6 +20,13 @@ from rural_basic_income.db.connection import get_engine
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_EXPORT_SCHEMAS = ("raw", "clean")
+EXCLUDED_EXPORT_TABLES = frozenset(
+    {
+        ("clean", "clean_inflow_web"),
+        ("clean", "clean_outflow_web"),
+    }
+)
+EXCLUDED_EXPORT_CLEAN_DATASETS = frozenset({"migration_web"})
 LIST_TABLES_SQL = text(
     """
     SELECT table_schema, table_name
@@ -102,6 +109,10 @@ def serialize_stata_value(value):
     return value
 
 
+def export_table_allowed(schema_name: str, table_name: str) -> bool:
+    return (schema_name, table_name) not in EXCLUDED_EXPORT_TABLES
+
+
 def list_export_tables(
     connection: Connection,
     *,
@@ -121,6 +132,7 @@ def list_export_tables(
     return tuple(
         ExportTable(schema_name=row[0], table_name=row[1])
         for row in rows
+        if export_table_allowed(row[0], row[1])
     )
 
 

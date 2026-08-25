@@ -42,6 +42,8 @@ class FakeConnection:
             [
                 ("raw", "population"),
                 ("clean", "clean_population"),
+                ("clean", "clean_inflow_web"),
+                ("clean", "clean_outflow_web"),
             ]
         )
 
