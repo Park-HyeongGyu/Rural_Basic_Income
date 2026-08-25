@@ -174,6 +174,7 @@ class TableDiscoveryConnection:
             return ScalarResult(
                 (
                     "clean_inflow",
+                    "clean_inflow_web",
                     "clean_population",
                     "clean_living_population",
                 )
@@ -183,6 +184,7 @@ class TableDiscoveryConnection:
 
 def test_fetch_clean_table_names_hides_od_tables_from_analysis() -> None:
     assert data_loader.fetch_clean_table_names(TableDiscoveryConnection()) == (
+        "clean_inflow_web",
         "clean_population",
         "clean_living_population",
     )

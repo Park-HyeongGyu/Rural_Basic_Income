@@ -18,6 +18,7 @@ class FakeConnection:
             return ScalarResult(
                 (
                     "clean_inflow",
+                    "clean_inflow_web",
                     "clean_population",
                     "clean_living_population",
                 )
@@ -27,6 +28,7 @@ class FakeConnection:
 
 def test_fetch_clean_table_names_hides_od_tables() -> None:
     assert data.fetch_clean_table_names(FakeConnection()) == [
+        "clean_inflow_web",
         "clean_population",
         "clean_living_population",
     ]

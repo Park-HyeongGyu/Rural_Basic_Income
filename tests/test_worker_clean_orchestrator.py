@@ -187,16 +187,17 @@ def test_clean_dataset_specs_rejects_unknown_dataset() -> None:
         clean_orchestrator.clean_dataset_specs(("not_a_dataset",))
 
 
-def test_clean_dataset_registry_includes_od_and_keeps_manual_out_of_default() -> None:
+def test_clean_dataset_registry_includes_od_web_and_keeps_manual_out_of_default() -> None:
     dataset_names = {
         spec.dataset_name
         for spec in clean_orchestrator.clean_dataset_specs(
-            ("migration_od", "living_population")
+            ("migration_od", "migration_web", "living_population")
         )
     }
 
-    assert dataset_names == {"migration_od", "living_population"}
+    assert dataset_names == {"migration_od", "migration_web", "living_population"}
     assert "migration_od" in clean_orchestrator.DEFAULT_CLEAN_DATASETS
+    assert "migration_web" in clean_orchestrator.DEFAULT_CLEAN_DATASETS
     assert "living_population" not in clean_orchestrator.DEFAULT_CLEAN_DATASETS
 
 

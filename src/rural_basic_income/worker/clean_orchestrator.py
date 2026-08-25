@@ -29,6 +29,22 @@ LOCAL_CURRENCY_REGION_CODES_PATH = (
     / "resources"
     / "local_currency_region_codes.csv"
 )
+POPULATION_BASELINE_202509_PATH = (
+    PROJECT_ROOT
+    / "src"
+    / "rural_basic_income"
+    / "worker"
+    / "resources"
+    / "population_baseline_202509.csv"
+)
+POPULATION_DECLINE_REGIONS_PATH = (
+    PROJECT_ROOT
+    / "src"
+    / "rural_basic_income"
+    / "worker"
+    / "resources"
+    / "population_decline_regions.csv"
+)
 CLEAN_SQL_LOCK_KEY = "rural_basic_income.clean_sql"
 LOGGER = logging.getLogger(__name__)
 
@@ -132,6 +148,16 @@ CLEAN_DATASETS = (
         '"statsYm"::integer',
     ),
     CleanDatasetSpec(
+        "migration_web",
+        PROJECT_ROOT / "sql" / "clean" / "clean_migration_web.sql",
+        (
+            "clean_inflow_web",
+            "clean_outflow_web",
+        ),
+        "clean.clean_inflow",
+        "date",
+    ),
+    CleanDatasetSpec(
         "living_population",
         PROJECT_ROOT / "sql" / "clean" / "clean_living_population.sql",
         (
@@ -149,6 +175,7 @@ DEFAULT_CLEAN_DATASETS = (
     "electricity",
     "local_currency",
     "migration_od",
+    "migration_web",
 )
 
 
@@ -467,11 +494,121 @@ def load_local_currency_region_codes(
     return len(rows)
 
 
+def load_population_baseline_202509(
+    connection: Connection,
+    path: Path = POPULATION_BASELINE_202509_PATH,
+) -> int:
+    with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
+        rows = list(csv.DictReader(csv_file))
+
+    expected_columns = ["region_sido", "region_sigungu", "population"]
+    if not rows:
+        raise ValueError(f"{path} must contain at least one population row")
+    if list(rows[0]) != expected_columns:
+        raise ValueError(f"{path} must have columns {expected_columns}")
+
+    connection.execute(text("DROP TABLE IF EXISTS pg_temp.population_baseline_202509"))
+    connection.execute(
+        text(
+            """
+            CREATE TEMP TABLE population_baseline_202509 (
+                region_sido text NOT NULL,
+                region_sigungu text NOT NULL,
+                population bigint NOT NULL CHECK (population >= 0),
+                PRIMARY KEY (region_sido, region_sigungu)
+            ) ON COMMIT PRESERVE ROWS
+            """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            INSERT INTO population_baseline_202509 (
+                region_sido,
+                region_sigungu,
+                population
+            )
+            VALUES (
+                :region_sido,
+                :region_sigungu,
+                :population
+            )
+            """
+        ),
+        [
+            {
+                "region_sido": row["region_sido"],
+                "region_sigungu": row["region_sigungu"],
+                "population": int(row["population"]),
+            }
+            for row in rows
+        ],
+    )
+
+    return len(rows)
+
+
+def load_population_decline_regions(
+    connection: Connection,
+    path: Path = POPULATION_DECLINE_REGIONS_PATH,
+) -> int:
+    with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
+        rows = list(csv.DictReader(csv_file))
+
+    expected_columns = ["region_sido", "region_sigungu"]
+    if not rows:
+        raise ValueError(f"{path} must contain at least one region row")
+    if list(rows[0]) != expected_columns:
+        raise ValueError(f"{path} must have columns {expected_columns}")
+
+    connection.execute(text("DROP TABLE IF EXISTS pg_temp.population_decline_region"))
+    connection.execute(
+        text(
+            """
+            CREATE TEMP TABLE population_decline_region (
+                region_sido text NOT NULL,
+                region_sigungu text NOT NULL,
+                PRIMARY KEY (region_sido, region_sigungu)
+            ) ON COMMIT PRESERVE ROWS
+            """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            INSERT INTO population_decline_region (
+                region_sido,
+                region_sigungu
+            )
+            VALUES (
+                :region_sido,
+                :region_sigungu
+            )
+            """
+        ),
+        [
+            {
+                "region_sido": row["region_sido"],
+                "region_sigungu": row["region_sigungu"],
+            }
+            for row in rows
+        ],
+    )
+
+    return len(rows)
+
+
 def load_clean_dependencies(connection: Connection) -> dict[str, int]:
     LOGGER.info("clean dependencies load start")
     dependencies = {
         "region_merge_key_rows": load_region_merge_key(connection),
         "local_currency_region_code_rows": load_local_currency_region_codes(
+            connection,
+        ),
+        "population_baseline_202509_rows": load_population_baseline_202509(
+            connection,
+        ),
+        "population_decline_region_rows": load_population_decline_regions(
             connection,
         ),
     }
